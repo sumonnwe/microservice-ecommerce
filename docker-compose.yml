@@ -1,0 +1,90 @@
+version: "3.8"
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U postgres"]
+      interval: 5s
+      retries: 10
+
+  zookeeper:
+    image: zookeeper:latest
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: apache/kafka:latest
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.49
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+
+  userservice:
+    build:
+      context: .
+      dockerfile: ./UserService/Dockerfile
+    environment:
+      - CONNECTIONSTRING=Host=postgres;Port=5432;Username=postgres;Password=postgres;Database=ecommerce
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - JWT_SECRET=supersecret_jwt_key_for_demo
+      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    ports:
+      - "5001:80"
+    depends_on:
+      - postgres
+      - kafka
+
+  orderservice:
+    build:
+      context: .
+      dockerfile: ./OrderService/Dockerfile
+    environment:
+      - CONNECTIONSTRING=Host=postgres;Port=5432;Username=postgres;Password=postgres;Database=ecommerce
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - JWT_SECRET=supersecret_jwt_key_for_demo
+      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    ports:
+      - "5002:80"
+    depends_on:
+      - postgres
+      - kafka
+
+  eventbridge:
+    build:
+      context: ./src/EventBridge
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+    ports:
+      - "5005:80"
+    depends_on:
+      - kafka
+
+  frontend:
+    build:
+      context: ./src/Frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - eventbridge
