@@ -250,8 +250,9 @@ Payload: {
 ```
 
 **Observe Events**
-- Open [http://localhost:3000](http://localhost:3000)
-- Watch Users Created and Orders Created update live via SignalR.
+
+- Open [http://localhost:8085](http://localhost:8085) to view events produced by the UserService and OrderService.
+- Open [http://localhost:3000](http://localhost:3000) to watch **Users Created** and **Orders Created** update live via **SignalR**, with events consumed from **EventBridge**.
 
 ---
 
