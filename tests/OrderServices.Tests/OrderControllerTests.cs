@@ -22,8 +22,8 @@ namespace OrderService.Tests
             var outboxRepo = new OrderService.Infrastructure.EF.OutboxRepository(db);
             var svc = new OrderAppService(outboxRepo);
 
-            var controller = new OrdersController(svc, db);
-            var dto = new OrderCreateDto { UserId = new Guid("0f8fad5b-d9cb-469f-a165-70867728950e"), Product = "Men Cloth", Quantity = 3, Decimal = 49.95 }; 
+            var controller = new OrdersController(db);
+            var dto = new OrderCreateDto { UserId = new Guid("0f8fad5b-d9cb-469f-a165-70867728950e"), Product = "Men Cloth", Quantity = 3, Price = (Decimal)49.95 }; 
             var res = await controller.Create(dto);
             Assert.IsInstanceOf<CreatedAtActionResult>(res);
         }

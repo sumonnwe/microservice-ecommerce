@@ -1,15 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authorization;
-using System;
-using System.Threading.Tasks;
-using OrderService.DTOs;
-using OrderService.Domain.Entities;
 using OrderService.Infrastructure.EF;
-using Microsoft.EntityFrameworkCore;
+using OrderService.Domain.Entities;
+using OrderService.DTOs;
 using Shared.Domain.Entities;
-using Shared.Domain.Services;
 using System.Text.Json;
-using OrderService.Events;
 
 namespace OrderService.Controllers
 {
@@ -18,21 +12,20 @@ namespace OrderService.Controllers
     public class OrdersController : ControllerBase
     {
         private readonly OrderDbContext _db;
-        private readonly IOutboxRepository _outboxRepo;
-        public OrdersController(OrderDbContext db, IOutboxRepository outboxRepo)
+
+        public OrdersController(OrderDbContext db)
         {
-            _db = db;
-            _outboxRepo = outboxRepo;
+            _db = db; 
         }
 
-        [HttpPost]
-        [Authorize]
+        [HttpPost] 
         public async Task<IActionResult> Create([FromBody] OrderCreateDto dto)
         {
             if (dto.Quantity <= 0) return BadRequest("Quantity must be > 0");
             if (dto.Price <= 0) return BadRequest("Price must be > 0");
-
-            await using var tx = await _db.Database.BeginTransactionAsync();
+            
+            var evt = new {
+                Id = Guid.NewGuid(), UserId = dto.UserId, Product = dto.Product, Quantity = dto.Quantity, Price = dto.Price };
 
             var order = new Order
             {
@@ -41,17 +34,6 @@ namespace OrderService.Controllers
                 Product = dto.Product,
                 Quantity = dto.Quantity,
                 Price = dto.Price
-            };
-
-            _db.Orders.Add(order);
-
-            var evt = new OrderCreatedEvent
-            {
-                Id = order.Id,
-                UserId = order.UserId,
-                Product = order.Product,
-                Quantity = order.Quantity,
-                Price = order.Price
             };
 
             var outbox = new OutboxEntry
@@ -64,9 +46,11 @@ namespace OrderService.Controllers
                 CreatedAt = DateTime.UtcNow
             };
 
+            // Single DbContext -> single transaction when SaveChangesAsync is called.
+            _db.Orders.Add(order);
             _db.OutboxEntries.Add(outbox);
             await _db.SaveChangesAsync();
-            await tx.CommitAsync();
+            //await tx.CommitAsync();
 
             return CreatedAtAction(nameof(Get), new { id = order.Id }, order);
         }
