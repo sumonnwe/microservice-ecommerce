@@ -26,4 +26,10 @@
 		<PrivateAssets>all</PrivateAssets>
 	</PackageReference> 
   </ItemGroup>
+  <!-- Ensure the testhost.deps.json is copied to build output so functional tests can find it -->
+  <ItemGroup>
+    <None Include="testhost.deps.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>

@@ -58,4 +58,36 @@ public class OrderAppServiceTests
         Func<Task> act = () => _sut.CreateOrderAsync(Guid.NewGuid(), "Item", -1, 10);
         act.Should().ThrowAsync<ArgumentException>().WithMessage("*Quantity*");
     }
+
+    [Test]
+    public void CreateOrderAsync_InvalidPrice_ShouldThrow()
+    {
+        Func<Task> act = () => _sut.CreateOrderAsync(Guid.NewGuid(), "Item", 1, 0m);
+        act.Should().ThrowAsync<ArgumentException>().WithMessage("*Price*");
+    }
+
+    [Test]
+    public void CreateOrderAsync_NullOrEmptyProduct_ShouldThrow()
+    {
+        Func<Task> act1 = () => _sut.CreateOrderAsync(Guid.NewGuid(), "", 1, 10m);
+        Func<Task> act2 = () => _sut.CreateOrderAsync(Guid.NewGuid(), (string?)null!, 1, 10m);
+
+        act1.Should().ThrowAsync<ArgumentException>().WithMessage("*product*");
+        act2.Should().ThrowAsync<ArgumentException>().WithMessage("*product*");
+    }
+
+    [Test]
+    public void CreateOrderAsync_WhenOutboxRepositoryThrows_ShouldPropagate()
+    {
+        // Arrange
+        _outboxRepo
+            .Setup(r => r.AddAsync(It.IsAny<OutboxEntry>()))
+            .ThrowsAsync(new InvalidOperationException("outbox failure"));
+
+        // Act
+        Func<Task> act = () => _sut.CreateOrderAsync(Guid.NewGuid(), "Widget", 1, 9.99m);
+
+        // Assert
+        act.Should().ThrowAsync<InvalidOperationException>().WithMessage("outbox failure");
+    }
 }

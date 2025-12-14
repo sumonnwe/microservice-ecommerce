@@ -24,6 +24,13 @@ builder.Services.AddSwaggerGen(c =>
     }
 });
 
+builder.Services.AddHttpClient("userservice", client =>
+{
+    var baseUrl = builder.Configuration["USER_SERVICE_BASE_URL"] ?? "http://userservice:8080";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+
 var app = builder.Build();
 
 // Ensure database (creates schema in memory)
