@@ -207,9 +207,10 @@ flowchart TB
 
 **Running the Application**
 
-1. **Clone the project**:
+1. **Clone and navigate the project folder**:
    ```cmd
-   git clone https://github.com/sumonnwe/microservice-ecommerce.git 
+   git clone https://github.com/sumonnwe/microservice-ecommerce.git
+   cd microservice-ecommerce
    ```
 
 2. **Start everything with Docker Compose**:
