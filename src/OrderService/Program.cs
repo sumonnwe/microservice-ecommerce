@@ -5,9 +5,8 @@ using OrderService.Infrastructure.EF;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
-var kafka = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
-builder.Services.AddOrderService(kafka);
+builder.Services.AddControllers(); 
+builder.Services.AddOrderService(builder.Configuration);
 
 // In-memory EF provider (fast for dev/tests). NOTE: no migrations with this provider.
 builder.Services.AddDbContext<OrderDbContext>(options =>

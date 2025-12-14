@@ -23,12 +23,12 @@ namespace UserService.Controllers
     public class UsersController : ControllerBase
     {
         private readonly UserDbContext _db;
-        private readonly ILogger<UsersController> _logger;
+        private readonly ILogger<UsersController> _logger; 
 
         public UsersController(UserDbContext db, ILogger<UsersController> logger)
         {
             _db = db;
-            _logger = logger;
+            _logger = logger; 
         }
 
         /// <summary>

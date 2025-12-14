@@ -15,7 +15,7 @@ export default function App() {
 
     const conn = new signalR.HubConnectionBuilder()
       .withUrl(hubUrl, {
-		  transport: signalR.HttpTransportType.WebSockets
+		  transport: signalR.HttpTransportType.WebSockets | signalR.HttpTransportType.LongPolling
 		})
       .withAutomaticReconnect()
       .configureLogging(signalR.LogLevel.Information)
