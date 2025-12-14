@@ -1,6 +1,6 @@
 # Event-Driven Microservices Demo (User / Order / EventBridge)
 
-This repository demonstrates a **reliable event-driven microservices architectureS** built with **.NET, Kafka, SignalR, and React**, using the **Transactional Outbox pattern** to ensure consistency between database writes and event publishing.
+This repository demonstrates a **reliable event-driven microservices architectures** built with **.NET, Kafka, SignalR, and React**, using the **Transactional Outbox pattern** to ensure consistency between database writes and event publishing.
 
 The system allows creating **Users and Orders**, emitting domain events reliably to Kafka, and streaming those events live to a **React frontend** via **SignalR**.
 
@@ -169,12 +169,12 @@ sequenceDiagram
 ```mermaid
 flowchart TB
   subgraph "UserService API"
-    U1["POST /api/users\nCreate User"]
-    U2["GET /api/users/{id}\nGet User"]
-    A1["POST /api/auth/login\nGet JWT"]
-    O1["GET /api/outbox/unsent\nInternal"]
-    O2["POST /api/outbox/mark-sent/{id}\nInternal"]
-    O3["POST /api/outbox/increment-retry/{id}\nInternal"]
+    U1["POST /api/users - Create User"]
+    U2["GET /api/users/{id} - Get User"]
+    A1["POST /api/auth/login - Get JWT"]
+    O1["GET /api/outbox/unsent - Internal"]
+    O2["POST /api/outbox/mark-sent/{id} - Internal"]
+    O3["POST /api/outbox/increment-retry/{id} - Internal"]
   end
 
 ```
@@ -195,42 +195,72 @@ flowchart TB
 ### Setup & Run Instructions
 
 **Prerequisites**
-- Docker & Docker Compose
+- .NET 8 SDK
+- Docker Desktop
+- Git
 - Node.js (optional for local frontend dev)
 
-```bash
-docker compose up --build
-```
+**Running the Application**
 
-**Port**
+1. **Clone the project**:
+   ```cmd
+   git clone https://github.com/sumonnwe/microservice-ecommerce.git 
+   ```
 
-| Service      | URL                                            |
-| ------------ | ---------------------------------------------- |
-| Frontend     | [http://localhost:3000](http://localhost:3000) |
-| EventBridge  | [http://localhost:5005](http://localhost:5005) |
-| UserService  | [http://localhost:5001](http://localhost:5001) |
-| OrderService | [http://localhost:5002](http://localhost:5002) |
+2. **Start everything with Docker Compose**:
+   ```cmd
+   docker-compose up --build
+   ```
 
-**Usage**
+3. **Running Port**
 
+| Service           | URL                                            |
+| ----------------- | ---------------------------------------------- |
+| Frontend          | [http://localhost:3000](http://localhost:3000) |
+| EventBridge       | [http://localhost:5005](http://localhost:5005) |
+| UserService       | [http://localhost:5001](http://localhost:5001) |
+| OrderService      | [http://localhost:5002](http://localhost:5002) |
+| OutboxDispatcher  | Background Worker Service                      |
+| Kafka             | [http://localhost:9092](http://localhost:9092) |
+| KafkaUI           | [http://localhost:8085](http://localhost:8085) |
+ 
+4. **API Documentation**
+
+**User Service**
+[http://localhost:5001/swagger/index.html](http://localhost:5001/swagger/index.html)
+
+**Order Service**
+[http://localhost:5002/swagger/index.html](http://localhost:5002/swagger/index.html)
+
+5. **Usage** 
 **Create a User**
 
 ```http
 POST http://localhost:5001/api/users
 Content-Type: application/json
-```
+Payload: {
+  "name": "string",
+  "email": "string"
+}
+``` 
 
 **Create an Order**
 
 ```http
 POST http://localhost:5002/api/orders
-Authorization: Bearer <JWT>
+Content-Type: application/json
+Payload: {
+  "userId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "product": "test product",
+  "quantity": 1,
+  "price": 50
+}
 ```
 
 **Observe Events**
 
-- Open [http://localhost:3000](http://localhost:3000)
-- Watch Users Created and Orders Created update live via SignalR.
+- Open [http://localhost:8085](http://localhost:8085) to view events produced by the UserService and OrderService.
+- Open [http://localhost:3000](http://localhost:3000) to watch **Users Created** and **Orders Created** update live via **SignalR**, with events consumed from **EventBridge**.
 
 ---
 
@@ -238,31 +268,49 @@ Authorization: Bearer <JWT>
 
 **Current**
 
-- Controller-level tests using EF Core InMemory + NUnit.
+Controller-level tests using EF Core InMemory and NUnit.
 
-**Recommended 3-Layer Strategy**
+**Recommended Multi-Layer Strategy**
 
-**1. Unit tests**
+1. Unit tests
+2. Integration tests
+3. Contract tests
+4. End-to-end smoke tests
 
-- Application services, validation, mapping.
+**Unit Test Automation**
 
-**2. Integration tests**
+**Frameworks & Tools**
 
-- WebApplicationFactory
+- NUnit – test framework
+- Moq – mocking dependencies
+- EF Core InMemory – fast persistence testing
+- dotnet test – CI-friendly execution
 
-- InMemory or Testcontainers (Postgres).
+**What Is Covered**
 
-**3. Contract tests**
+- Controller actions (success & validation failures)
+- Application service logic
+- Mapping and input validation
+- Outbox record creation
 
-- Kafka topic + JSON schema validation.
+**Running Unit Tests**
 
-**4. End-to-End smoke**
+```cmd
+dotnet test
+```
 
-- docker compose up
+**Example Test Scope**
 
-- Create user/order
+- Create User → verifies User + OutboxEntry persisted
+- Create Order → verifies Order + OutboxEntry persisted
+- Invalid payload → returns correct HTTP status
 
-- Assert event appears in UI.
+**Future Test Improvements**
+
+- Integration tests using WebApplicationFactory
+- Kafka Testcontainers for message verification
+- Contract tests for event schemas
+- CI pipeline integration (GitHub Actions)
 
 ---
 
