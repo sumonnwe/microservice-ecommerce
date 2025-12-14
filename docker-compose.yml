@@ -1,72 +1,110 @@
-version: "3.8"
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ecommerce
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL","pg_isready -U postgres"]
-      interval: 5s
-      retries: 10
-
-  zookeeper:
-    image: zookeeper:latest
-    environment:
-      - ALLOW_ANONYMOUS_LOGIN=yes
-    ports:
-      - "2181:2181"
-
+﻿services:
   kafka:
     image: apache/kafka:latest
-    environment:
-      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-      - ALLOW_PLAINTEXT_LISTENER=yes
+    networks:
+      - app-net
+    container_name: kafka
     ports:
       - "9092:9092"
-    depends_on:
-      - zookeeper
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093 
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
 
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      
+      # ✅ single broker must be 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # ✅ make topic creation easy for take-home
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+      
   jaeger:
     image: jaegertracing/all-in-one:1.49
+    networks:
+      - app-net
     ports:
       - "16686:16686"
       - "14268:14268"
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    networks:
+      - app-net
+    container_name: kafka-ui
+    ports:
+      - "8085:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_started
+
   userservice:
     build:
-      context: .
+      context: ./src
       dockerfile: ./UserService/Dockerfile
-    environment:
-      - CONNECTIONSTRING=Host=postgres;Port=5432;Username=postgres;Password=postgres;Database=ecommerce
+    environment: 
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JWT_SECRET=supersecret_jwt_key_for_demo
       - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_ENVIRONMENT=Development
     ports:
-      - "5001:80"
-    depends_on:
-      - postgres
-      - kafka
+      - "5001:8080"
+    networks:
+      - app-net
+    depends_on: 
+      kafka:
+        condition: service_started
 
   orderservice:
     build:
-      context: .
+      context: ./src
       dockerfile: ./OrderService/Dockerfile
-    environment:
-      - CONNECTIONSTRING=Host=postgres;Port=5432;Username=postgres;Password=postgres;Database=ecommerce
+    environment: 
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JWT_SECRET=supersecret_jwt_key_for_demo
       - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - ASPNETCORE_URLS=http://+:8080
+      - ASPNETCORE_ENVIRONMENT=Development
     ports:
-      - "5002:80"
+      - "5002:8080"
+    networks:
+      - app-net
+    depends_on: 
+      kafka:
+        condition: service_started
+
+  outboxdispatcher:
+    build:
+      context: ./src
+      dockerfile: ./OutboxDispatcher/Dockerfile
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      # Use internal service ports (containers talk to each other on these)
+      - OUTBOX_SERVICES=http://userservice:8080,http://orderservice:8080
+    networks:
+      - app-net
     depends_on:
-      - postgres
-      - kafka
+      kafka:
+        condition: service_started
+      userservice:
+        condition: service_started
+      orderservice:
+        condition: service_started
 
   eventbridge:
     build:
@@ -75,16 +113,31 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
+      - ASPNETCORE_URLS=http://+:80
     ports:
       - "5005:80"
+    networks:
+      - app-net
     depends_on:
-      - kafka
+      kafka:
+        condition: service_started
 
   frontend:
     build:
       context: ./src/Frontend
       dockerfile: Dockerfile
+    environment:
+      - REACT_APP_EVENTBRIDGE_URL=http://localhost:5005/eventhub
     ports:
-      - "3000:80"
+      - "3000:80" 
+    networks:
+      - app-net
     depends_on:
       - eventbridge
+      
+volumes:
+  kafka-data:
+  
+networks:
+  app-net:
+    driver: bridge

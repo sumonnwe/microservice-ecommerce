@@ -1,0 +1,3 @@
+window._env = {
+  REACT_APP_EVENTBRIDGE_URL: "%%REACT_APP_EVENTBRIDGE_URL%%"
+};

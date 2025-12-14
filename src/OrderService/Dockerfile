@@ -1,26 +1,25 @@
-#FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
-#WORKDIR /app
-#EXPOSE 80
-#FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-#WORKDIR /src
-#COPY . .
-#RUN dotnet restore ./OrderService.csproj
-#RUN dotnet publish ./OrderService.csproj -c Release -o /app/publish
-#FROM base AS final
-#WORKDIR /app
-#COPY --from=build /app/publish .
-#ENTRYPOINT ["dotnet", "OrderService.dll"]
-
+# Build stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
+
+# Copy everything from build context (src/OrderService)
+COPY ["OrderService/OrderService.csproj", "OrderService/"]
+COPY ["Shared/Shared.csproj", "Shared/"] 
+
+# Restore using correct path
+RUN dotnet restore OrderService/OrderService.csproj
+
+# Copy everything and publish
 COPY . .
-RUN dotnet restore ./OrderService/OrderService.csproj
-RUN dotnet publish ./OrderService/OrderService.csproj -c Release -o /app/publish
+WORKDIR /src/OrderService
+RUN dotnet publish "OrderService.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
-COPY --from=build /app/publish .
-EXPOSE 80
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+
+# copy published app
+COPY --from=build /app/publish ./
 ENTRYPOINT ["dotnet", "OrderService.dll"]
-
-

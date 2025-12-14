@@ -20,7 +20,7 @@ namespace OrderService.Application
 
         public async Task<Order> CreateOrderAsync(Guid userId, string product, int quantity, decimal price)
         {
-            if (string.IsNullOrWhiteSpace(quantity)) throw new ArgumentException("Quantity required", nameof(quantity));
+            if (quantity < 0) throw new ArgumentException("Quantity is wrong", nameof(quantity));
             if (string.IsNullOrWhiteSpace(product)) throw new ArgumentException("Product required", nameof(product));
 
             var order = new Order { Id = Guid.NewGuid(), UserId = userId, Product = product, Quantity = quantity, Price = price };

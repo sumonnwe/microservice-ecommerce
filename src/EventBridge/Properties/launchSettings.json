@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "EventBridge": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "KAFKA_BOOTSTRAP_SERVERS": "localhost:29092"
+      },
+      "applicationUrl": "https://localhost:53681;http://localhost:53682"
+    }
+  }
+}
