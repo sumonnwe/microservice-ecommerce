@@ -1,13 +1,14 @@
-﻿using System;
+﻿using Confluent.Kafka;
+using Confluent.Kafka.Admin;
+using EventBridge.Hubs;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Confluent.Kafka;
-using Microsoft.AspNetCore.SignalR;
-using EventBridge.Hubs;
-using Microsoft.Extensions.Configuration;
 
 namespace EventBridge.BackgroundServices
 {
@@ -25,6 +26,7 @@ namespace EventBridge.BackgroundServices
             _bootstrap = cfg["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
         }
 
+        // (only the ExecuteAsync method body is shown — replace the existing metadata wait loop)
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var conf = new ConsumerConfig
@@ -60,10 +62,14 @@ namespace EventBridge.BackgroundServices
                 // Subscribe early so partition assignment behaviour is correct, but wait for topics/broker availability before consuming.
                 consumer.Subscribe(_topics);
 
-                // Create an admin client to fetch metadata (AdminClient exposes GetMetadata).
+                // Create an admin client to fetch metadata (AdminClient exposes GetMetadata) and optionally create topics.
                 using var admin = new AdminClientBuilder(conf).Build();
 
                 // Wait for broker and topics to become available before entering main consume loop.
+                var waitTimeout = TimeSpan.FromSeconds(60);
+                var pollInterval = TimeSpan.FromSeconds(2);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     try
@@ -75,6 +81,7 @@ namespace EventBridge.BackgroundServices
                         }
                         else
                         {
+                            // topics that are absent or have an error
                             var missing = _topics.Where(t =>
                                 !md.Topics.Any(x => string.Equals(x.Topic, t, StringComparison.OrdinalIgnoreCase) && !x.Error.IsError)
                             ).ToArray();
@@ -86,6 +93,41 @@ namespace EventBridge.BackgroundServices
                             }
 
                             _logger.LogWarning("Waiting for topics to become available: {missing}", string.Join(',', missing));
+
+                            // Attempt to create missing topics (best-effort). This requires broker/admin privileges.
+                            try
+                            {
+                                var specs = missing.Select(t => new TopicSpecification
+                                {
+                                    Name = t,
+                                    NumPartitions = 1,
+                                    ReplicationFactor = 1
+                                }).ToList();
+
+                                if (specs.Count > 0)
+                                {
+                                    _logger.LogInformation("Attempting to create missing topics: {topics}", string.Join(',', missing));
+                                    try
+                                    {
+                                        // best-effort create
+                                        admin.CreateTopicsAsync(specs).GetAwaiter().GetResult();
+                                        _logger.LogInformation("CreateTopicsAsync completed for: {topics}", string.Join(',', missing));
+                                    }
+                                    catch (CreateTopicsException cte)
+                                    {
+                                        // log and continue — topics might already be being created or creation not allowed
+                                        _logger.LogWarning(cte, "CreateTopicsException while creating topics; continuing to wait");
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning(ex, "Exception while attempting to create topics; continuing to wait");
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Error when attempting topic creation; will continue to wait");
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -93,7 +135,15 @@ namespace EventBridge.BackgroundServices
                         _logger.LogWarning(ex, "Error while fetching metadata; will retry");
                     }
 
-                    try { await Task.Delay(2000, stoppingToken); } catch (OperationCanceledException) { break; }
+                    if (sw.Elapsed > waitTimeout)
+                    {
+                        // Give up waiting — log and proceed. Consumer will still work once topics appear,
+                        // or errors will be raised by the client. This avoids infinite blocking.
+                        _logger.LogWarning("Timeout waiting for topics ({timeout}s). Proceeding and relying on consumer to handle late topic creation.", waitTimeout.TotalSeconds);
+                        break;
+                    }
+
+                    try { await Task.Delay(pollInterval, stoppingToken); } catch (OperationCanceledException) { break; }
                 }
 
                 // Main consume loop. Close the consumer once, when shutting down.
@@ -113,7 +163,7 @@ namespace EventBridge.BackgroundServices
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Fatal consume error – continuing");
-                        await Task.Delay(1000, stoppingToken);
+                        try { await Task.Delay(1000, stoppingToken); } catch (OperationCanceledException) { break; }
                         continue;
                     }
 
