@@ -260,31 +260,49 @@ Payload: {
 
 **Current**
 
-- Controller-level tests using EF Core InMemory + NUnit.
+Controller-level tests using EF Core InMemory and NUnit.
 
-**Recommended 3-Layer Strategy**
+**Recommended Multi-Layer Strategy**
 
-**1. Unit tests**
+1. Unit tests
+2. Integration tests
+3. Contract tests
+4. End-to-end smoke tests
 
-- Application services, validation, mapping.
+**Unit Test Automation**
 
-**2. Integration tests**
+**Frameworks & Tools**
 
-- WebApplicationFactory
+- NUnit – test framework
+- Moq – mocking dependencies
+- EF Core InMemory – fast persistence testing
+- dotnet test – CI-friendly execution
 
-- InMemory or Testcontainers (Postgres).
+**What Is Covered**
 
-**3. Contract tests**
+- Controller actions (success & validation failures)
+- Application service logic
+- Mapping and input validation
+- Outbox record creation
 
-- Kafka topic + JSON schema validation.
+**Running Unit Tests**
 
-**4. End-to-End smoke**
+```cmd
+dotnet test
+```
 
-- docker compose up
+**Example Test Scope**
 
-- Create user/order
+- Create User → verifies User + OutboxEntry persisted
+- Create Order → verifies Order + OutboxEntry persisted
+- Invalid payload → returns correct HTTP status
 
-- Assert event appears in UI.
+**Future Test Improvements**
+
+- Integration tests using WebApplicationFactory
+- Kafka Testcontainers for message verification
+- Contract tests for event schemas
+- CI pipeline integration (GitHub Actions)
 
 ---
 
