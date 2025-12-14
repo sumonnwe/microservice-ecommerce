@@ -224,7 +224,15 @@ flowchart TB
 | Kafka             | [http://localhost:9092](http://localhost:9092) |
 | KafkaUI           | [http://localhost:8085](http://localhost:8085) |
  
-4. **Usage** 
+4. **API Documentation**
+
+**User Service**
+[http://localhost:5001/swagger/index.html](http://localhost:5001/swagger/index.html)
+
+**Order Service**
+[http://localhost:5002/swagger/index.html](http://localhost:5002/swagger/index.html)
+
+5. **Usage** 
 **Create a User**
 
 ```http
