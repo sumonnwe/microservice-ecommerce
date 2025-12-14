@@ -1,14 +1,14 @@
 ﻿using Confluent.Kafka;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using OutboxDispatcher.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
 using Shared.Domain.Entities;
 
 namespace OutboxDispatcher.Worker
@@ -20,16 +20,22 @@ namespace OutboxDispatcher.Worker
         private readonly HttpClient _http;
         private readonly ProducerConfig _producerConfig;
         private readonly string[] _serviceUrls;
-        private readonly int _pollIntervalMs = 5000;
-        private readonly int _maxRetries = 5;
+        private readonly int _pollIntervalMs;
+        private readonly int _maxRetries;
         private readonly IProducer<Null, string> _producer;
 
-        public OutboxWorker(ILogger<OutboxWorker> logger, IHttpClientFactory httpFactory, IConfiguration config)
+        public OutboxWorker(ILogger<OutboxWorker> logger, IHttpClientFactory httpFactory, IOptions<OutboxOptions> options)
         {
             _logger = logger;
             _http = httpFactory.CreateClient();
-            var kafka = config["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
-            _serviceUrls = (config["OUTBOX_SERVICES"] ?? "http://userservice:8080,http://orderservice:8080").Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+            var opts = options?.Value ?? new OutboxOptions();
+
+            var kafka = opts.KafkaBootstrapServers ?? "kafka:9092";
+            _serviceUrls = opts.ServiceUrls ?? new[] { "http://userservice:8080", "http://orderservice:8080" };
+            _pollIntervalMs = opts.PollIntervalMs;
+            _maxRetries = opts.MaxRetries;
+
             _producerConfig = new ProducerConfig { BootstrapServers = kafka };
             _producer = new ProducerBuilder<Null, string>(_producerConfig).Build();
         }
@@ -42,7 +48,7 @@ namespace OutboxDispatcher.Worker
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
             _producer.Flush(TimeSpan.FromSeconds(5));
-            base.StopAsync(cancellationToken);
+            await base.StopAsync(cancellationToken);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)

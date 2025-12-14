@@ -5,14 +5,17 @@ using UserService.Infrastructure.EF;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
-var kafka = builder.Configuration["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
-builder.Services.AddUserService(kafka);
+// Ensure appsettings.json is loaded (it's loaded by default, this is explicit)
+builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+
+// Register feature services and pass the configuration so DI registrations that need config can use it
+builder.Services.AddUserService(builder.Configuration);
 
 // In-memory EF provider (fast for dev/tests). NOTE: no migrations with this provider.
 builder.Services.AddDbContext<UserDbContext>(options =>
     options.UseInMemoryDatabase("UserService_InMemory"));
 
+builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {

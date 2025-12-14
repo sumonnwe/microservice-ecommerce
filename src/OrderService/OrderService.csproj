@@ -10,6 +10,9 @@
     <Compile Remove="Controllers\AuthController.cs" />
   </ItemGroup>
   <ItemGroup>
+    <None Remove=".env" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Shared\Shared.csproj" />
     <PackageReference Include="Confluent.Kafka" Version="2.1.1" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.1.0" />

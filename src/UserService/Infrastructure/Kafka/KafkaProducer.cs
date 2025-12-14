@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Confluent.Kafka;
+using Microsoft.Extensions.Configuration;
 using Shared.Domain.Services;
 
 namespace UserService.Infrastructure.Kafka
@@ -9,9 +10,11 @@ namespace UserService.Infrastructure.Kafka
     {
         private readonly IProducer<Null, string> _producer;
 
-        public KafkaProducer(string bootstrapServers)
+        // Reads configuration from IConfiguration (appsettings.json / env vars)
+        public KafkaProducer(IConfiguration configuration)
         {
-            var cfg = new ProducerConfig { BootstrapServers = bootstrapServers, Acks = Acks.All };
+            var bootstrap = configuration["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
+            var cfg = new ProducerConfig { BootstrapServers = bootstrap, Acks = Acks.All };
             _producer = new ProducerBuilder<Null, string>(cfg).Build();
         }
 

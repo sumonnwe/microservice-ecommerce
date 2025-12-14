@@ -11,20 +11,13 @@
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093 
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-      
-      # ✅ single broker must be 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data 
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-
-      # ✅ make topic creation easy for take-home
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1 
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-
       CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
     volumes:
       - kafka-data:/var/lib/kafka/data
@@ -55,6 +48,7 @@
     build:
       context: ./src
       dockerfile: ./UserService/Dockerfile
+    container_name: userservice
     environment: 
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JWT_SECRET=supersecret_jwt_key_for_demo
@@ -72,7 +66,8 @@
   orderservice:
     build:
       context: ./src
-      dockerfile: ./OrderService/Dockerfile
+      dockerfile: ./OrderService/Dockerfile    
+    container_name: orderservice
     environment: 
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - JWT_SECRET=supersecret_jwt_key_for_demo
@@ -91,6 +86,7 @@
     build:
       context: ./src
       dockerfile: ./OutboxDispatcher/Dockerfile
+    container_name: outboxdispatcher
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
@@ -109,7 +105,8 @@
   eventbridge:
     build:
       context: ./src/EventBridge
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile    
+    container_name: eventbridge
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
@@ -126,6 +123,7 @@
     build:
       context: ./src/Frontend
       dockerfile: Dockerfile
+    container_name: frontend
     environment:
       - REACT_APP_EVENTBRIDGE_URL=http://localhost:5005/eventhub
     ports:
