@@ -31,13 +31,13 @@ The system allows creating **Users and Orders**, emitting domain events reliably
 
 ```mermaid
 flowchart LR
-  FE[React Frontend] <--> SB["SignalR Hub\n(EventBridge)"]
-  SB <-- Kafka Consume --> K["Kafka Topics\nusers.created\norders.created\ndead-letter"]
+  FE[React Frontend] <--> SB["SignalR Hub<br/>(EventBridge)"]
+  SB <-- Kafka Consume --> K["Kafka Topics<br/>users.created<br/>orders.created<br/>dead-letter"]
 
-  US["UserService\nREST API\n(Save User + OutboxEntry\nin one transaction)"] -->|EF Core SaveChanges| UDB[(User DB)]
-  OS["OrderService\nREST API\n(Save Order + OutboxEntry\nin one transaction)"] -->|EF Core SaveChanges| ODB[(Order DB)]
+  US["UserService<br/>REST API<br/>(Save User + OutboxEntry<br/>in one transaction)"] -->|EF Core SaveChanges| UDB[(User DB)]
+  OS["OrderService<br/>REST API<br/>(Save Order + OutboxEntry<br/>in one transaction)"] -->|EF Core SaveChanges| ODB[(Order DB)]
 
-  OD["OutboxDispatcher\nBackground Worker"] -->|Poll unsent| US
+  OD["OutboxDispatcher<br/>Background Worker"] -->|Poll unsent| US
   OD -->|Poll unsent| OS
   OD -->|Publish events| K
 
@@ -171,19 +171,24 @@ flowchart TB
   subgraph "UserService API"
     U1["POST /api/users - Create User"]
     U2["GET /api/users/{id} - Get User"]
-    A1["POST /api/auth/login - Get JWT"]
     O1["GET /api/outbox/unsent - Internal"]
     O2["POST /api/outbox/mark-sent/{id} - Internal"]
     O3["POST /api/outbox/increment-retry/{id} - Internal"]
   end
-
 ```
 
 #### OrderServiceAPI
 
-- POST /api/orders
-- GET /api/orders/{id}
-- Same internal outbox endpoints.
+```mermaid
+flowchart TB
+  subgraph "OrderService API"
+    U1["POST /api/orders - Create Order"]
+    U2["GET /api/orders/{id} - Get Order"]
+    O1["GET /api/outbox/unsent - Internal"]
+    O2["POST /api/outbox/mark-sent/{id} - Internal"]
+    O3["POST /api/outbox/increment-retry/{id} - Internal"]
+  end
+```
 
 **Design principle**
 
