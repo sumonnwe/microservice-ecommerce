@@ -17,7 +17,7 @@ The system allows creating **Users and Orders**, emitting domain events reliably
 - [Usage](#usage)
 - [Testing Strategy](#testing-strategy)
 - [Trade-offs & Future Improvements](#trade-offs--future-improvements)
-- [AI Assistance & Prompt Documentation](#ai-assistance-prompt-documentation)
+- [AI Assistance & Prompt Documentation](#ai-assistance--prompt-documentation)
 - [Summary](#summary)
 
 ---
