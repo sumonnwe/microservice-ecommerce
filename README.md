@@ -348,19 +348,19 @@ dotnet test
 
 ---
 
-## 🤖 AI Assistance & Prompt Documentation
+### AI Assistance & Prompt Documentation
 
 This project was developed with the assistance of AI tools to accelerate scaffolding, 
 validate architectural decisions, and improve code quality. 
 All generated code was reviewed, adapted, and tested manually.
 
-### AI Tools Used
+#### AI Tools Used
 - **ChatGPT** – system design reasoning, architecture review, prompt refinement
 - **GitHub Copilot** – project scaffolding, boilerplate generation, test skeletons
 
 ---
 
-### 1. Architecture & System Design Prompts
+#### 1. Architecture & System Design Prompts
 
 Used to design the microservices architecture, event-driven pattern, and clean code structure.
 
@@ -377,7 +377,7 @@ Explain architectural decisions and trade-offs.
 
 ---
 
-### 2. Project Scaffolding Prompt
+#### 2. Project Scaffolding Prompt
 
 Used to generate a compile-ready solution skeleton.
 
@@ -395,7 +395,7 @@ Do not implement business logic.
 
 ---
 
-### 3. Database & EF Core Migration Prompts
+#### 3. Database & EF Core Migration Prompts
 
 Used to configure EF Core with an **in-memory database** for development and demonstration purposes.
 
@@ -413,7 +413,7 @@ while maintaining clean architecture and testability?
 
 ---
 
-### 4. Docker & Environment Configuration Prompts
+#### 4. Docker & Environment Configuration Prompts
 
 Used to debug Docker startup, port binding, and Swagger access issues.
 
@@ -430,7 +430,7 @@ Explain common causes and provide a correct Docker and ASP.NET Core configuratio
 
 ---
 
-### 5. Testing & CI/CD Prompts
+#### 5. Testing & CI/CD Prompts
 
 Used to scaffold test projects and CI workflow.
 
@@ -445,7 +445,7 @@ to restore, build, and test .NET 8 microservices.
 
 ---
 
-### Developer Responsibility Statement
+#### Developer Responsibility Statement
 
 AI tools were used as **assistive tools only**.
 All code, configurations, and architectural decisions were:
