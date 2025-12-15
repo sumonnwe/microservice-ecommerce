@@ -17,6 +17,7 @@ The system allows creating **Users and Orders**, emitting domain events reliably
 - [Usage](#usage)
 - [Testing Strategy](#testing-strategy)
 - [Trade-offs & Future Improvements](#trade-offs--future-improvements)
+- [AI Assistance & Prompt Documentation](#ai-assistance--prompt-documentation)
 - [Summary](#summary)
 
 ---
@@ -207,9 +208,10 @@ flowchart TB
 
 **Running the Application**
 
-1. **Clone the project**:
+1. **Clone and navigate the project folder**:
    ```cmd
-   git clone https://github.com/sumonnwe/microservice-ecommerce.git 
+   git clone https://github.com/sumonnwe/microservice-ecommerce.git
+   cd microservice-ecommerce
    ```
 
 2. **Start everything with Docker Compose**:
@@ -323,16 +325,16 @@ dotnet test
 
 #### Trade-offs
 
-- **Polling vs Internal Dispatcher**
+**Polling vs Internal Dispatcher**
 
 - Polling is simple and visible.
 - Internal dispatcher is cleaner and more efficient.
 
-- **At-least-once delivery**
+**At-least-once delivery**
 
 - Possible duplicates → consumers must be idempotent.
 
-- **Schema evolution**
+**Schema evolution**
 
 - Versioned topics (users.created.v1) or schema version field.
 
@@ -343,6 +345,116 @@ dotnet test
 - Add health/readiness probes.
 - Add batching and exponential backoff.
 - Introduce schema registry / JSON schema validation.
+
+---
+
+### AI Assistance & Prompt Documentation
+
+This project was developed with the assistance of AI tools to accelerate scaffolding, 
+validate architectural decisions, and improve code quality. 
+All generated code was reviewed, adapted, and tested manually.
+
+#### AI Tools Used
+- **ChatGPT** – system design reasoning, architecture review, prompt refinement
+- **GitHub Copilot** – project scaffolding, boilerplate generation, test skeletons
+
+---
+
+#### 1. Architecture & System Design Prompts
+
+Used to design the microservices architecture, event-driven pattern, and clean code structure.
+
+**Prompt (ChatGPT):**
+
+Design a clean, testable microservices architecture using .NET 8, Kafka, and the Outbox pattern.
+Focus on separation of concerns, dependency injection, and Docker-based orchestration.
+Explain architectural decisions and trade-offs.
+
+**Outcome:**
+- Defined bounded contexts (UserService, OrderService, EventBridge)
+- Selected Outbox pattern for reliable event publishing
+- Established clean architecture folder structure per service
+
+---
+
+#### 2. Project Scaffolding Prompt
+
+Used to generate a compile-ready solution skeleton.
+
+**Prompt (GitHub Copilot Chat):**
+
+Scaffold a solution template for an event-driven e-commerce system using .NET 8, Kafka,
+EF Core with SQLite, Docker, React, and GitHub Actions.
+Focus on folder structure, minimal stub code, and clean architecture.
+Do not implement business logic.
+
+**Outcome:**
+- Generated solution and project structure
+- Created placeholder controllers, DbContext, entities, and interfaces
+- Ensured all projects build successfully before adding logic
+
+---
+
+#### 3. Database & EF Core Migration Prompts
+
+Used to configure EF Core with an **in-memory database** for development and demonstration purposes.
+
+**Prompt (ChatGPT):**
+
+How should EF Core be configured for an event-driven .NET microservices system
+using an in-memory database with User, Order, and Outbox entities,
+while maintaining clean architecture and testability?
+
+**Outcome:**
+- Configured EF Core using the **In-Memory database provider**
+- Modeled `User`, `Order`, and `OutboxEntry` entities for persistence
+- Enabled the **Outbox Pattern** without external database dependencies
+- Simplified local setup by removing the need for database migrations
+
+---
+
+#### 4. Docker & Environment Configuration Prompts
+
+Used to debug Docker startup, port binding, and Swagger access issues.
+
+**Prompt (ChatGPT):**
+
+Swagger works in Visual Studio but not when running in Docker.
+Explain common causes and provide a correct Docker and ASP.NET Core configuration.
+
+
+**Outcome:**
+- Fixed ASPNETCORE_URLS binding
+- Disabled HTTPS redirection in containers
+- Enabled Swagger for Docker environment
+
+---
+
+#### 5. Testing & CI/CD Prompts
+
+Used to scaffold test projects and CI workflow.
+
+**Prompt (GitHub Copilot):**
+
+Generate NUnit test project scaffolding and a GitHub Actions workflow
+to restore, build, and test .NET 8 microservices.
+
+
+**Outcome:**
+- Created NUnit test projects
+
+---
+
+#### Developer Responsibility Statement
+
+AI tools were used as **assistive tools only**.
+All code, configurations, and architectural decisions were:
+- Reviewed manually
+- Debugged locally and in Docker
+- Adjusted to meet project requirements
+
+Final responsibility for correctness, security, and maintainability
+remains with the developer.
 
 ---
 
