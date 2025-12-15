@@ -323,28 +323,39 @@ dotnet test
 
 ### Trade-offs & Future Improvements
 
-#### Trade-offs
+#### Trade-offs and Assumptions
 
-**Polling vs Internal Dispatcher**
+**Trade-offs**
+- An in-memory database was selected to simplify setup and reduce external dependencies.
+- This improves developer experience but sacrifices persistence and production realism.
 
-- Polling is simple and visible.
-- Internal dispatcher is cleaner and more efficient.
-
-**At-least-once delivery**
-
-- Possible duplicates → consumers must be idempotent.
-
-**Schema evolution**
-
-- Versioned topics (users.created.v1) or schema version field.
+**Assumptions**
+- The system is intended for development and demonstration purposes.
+- Data durability and high availability are not required.
+- Load and traffic are minimal.
 
 #### Improvements
 
-- Move dispatcher inside services.
-- Add authentication to outbox endpoints.
-- Add health/readiness probes.
-- Add batching and exponential backoff.
-- Introduce schema registry / JSON schema validation.
+**Embed the Outbox Dispatcher within each service**
+ - Run the dispatcher as a background worker inside UserService and OrderService to reduce cross-service coupling and simplify deployment.
+
+**Introduce authentication and authorization**
+ - Secure API endpoints and Outbox processing with JWT-based authentication and role-based access control to prevent unauthorized access.
+
+**Replace in-memory database with persistent storage**
+ - Migrate to SQLite or PostgreSQL to enable data persistence, durability, and realistic production behavior.
+
+**Add EF Core migrations**
+ - Introduce schema migrations to support controlled database evolution and versioning across environments.
+
+**Ensure transactional consistency**
+ - Implement transactional record commits so domain data changes and Outbox entries are saved atomically within a single database transaction.
+
+**Improve reliability and resilience**
+ - Add retry policies, dead-letter handling, and structured logging for Outbox event publishing.
+
+**Enhance observability**
+ - Introduce correlation IDs, distributed tracing, and metrics to improve monitoring and debugging across services.
 
 ---
 
