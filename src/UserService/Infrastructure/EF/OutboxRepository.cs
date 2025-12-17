@@ -21,6 +21,13 @@ namespace UserService.Infrastructure.EF
             await _db.SaveChangesAsync();
         }
 
+        public async Task UpdateAsync(OutboxEntry entry)
+        {
+            // Add entry to DbContext; caller owns transaction around other domain entities
+            _db.OutboxEntries.Add(entry);
+            await _db.SaveChangesAsync();
+        }
+
         public async Task<List<OutboxEntry>> GetUnsentAsync(int maxRetry = 5)
         {
             return await _db.OutboxEntries.Where(e => e.SentAt == null && e.RetryCount < maxRetry)

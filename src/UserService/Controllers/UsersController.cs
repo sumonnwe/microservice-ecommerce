@@ -16,6 +16,7 @@ namespace UserService.Controllers
     /// Endpoints:
     /// - POST /api/users : create a user and enqueue a "users.created" outbox event.
     /// - GET  /api/users/{id} : retrieve a user by id.
+    /// - POST /api/users/{id}/heartbeat : update user's LastSeenUtc
     /// </remarks>
     [ApiController]
     [Route("api/users")]
@@ -210,6 +211,48 @@ namespace UserService.Controllers
                 _logger.LogError(ex, "Error fetching user with Id={UserId}", id);
                 return Problem(detail: "Failed to fetch user.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
+        } 
+
+        /// <summary>
+        /// Record a heartbeat for a user (update LastSeenUtc).
+        /// POST /api/users/{id}/heartbeat
+        /// </summary>
+        [HttpPost("{id:guid}/heartbeat")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> Heartbeat(Guid id, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+                if (user == null)
+                {
+                    _logger.LogInformation("Heartbeat: user not found. Id={UserId}", id);
+                    return NotFound();
+                }
+
+                user.LastSeenUtc = DateTime.UtcNow;
+
+                using var saveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                saveCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+                await _db.SaveChangesAsync(saveCts.Token);
+
+                _logger.LogInformation("Heartbeat recorded for user {UserId}", id);
+                return NoContent();
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Heartbeat cancelled for user {UserId}. TraceId={TraceId}", id, HttpContext?.TraceIdentifier);
+                return StatusCode(StatusCodes.Status499ClientClosedRequest);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error recording heartbeat for user {UserId}. TraceId={TraceId}", id, HttpContext?.TraceIdentifier);
+                return Problem(detail: "Failed to record heartbeat.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+            }
         }
+
     }
 }

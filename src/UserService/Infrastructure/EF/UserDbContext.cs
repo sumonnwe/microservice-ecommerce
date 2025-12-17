@@ -23,6 +23,15 @@ namespace UserService.Infrastructure.EF
                 b.HasKey(x => x.Id);
                 b.Property(x => x.Name).IsRequired();
                 b.Property(x => x.Email).IsRequired();
+                b.Property(x => x.IsActive).IsRequired();
+
+                // LastSeenUtc / InactiveSinceUtc are optional
+                b.Property(x => x.LastSeenUtc).IsRequired(false);
+                b.Property(x => x.InactiveSinceUtc).IsRequired(false);
+
+                // index to speed queries for inactive users
+                b.HasIndex(x => x.InactiveSinceUtc);
+                b.HasIndex(x => x.LastSeenUtc);
             });
 
             modelBuilder.Entity<OutboxEntry>(b =>
