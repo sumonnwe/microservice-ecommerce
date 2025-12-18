@@ -1,8 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Shared.Domain;
 using Shared.Domain.Entities;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore; 
 using UserService.Domain.Entities;
 using UserService.DTOs;
 using UserService.Infrastructure.EF;
@@ -16,7 +20,6 @@ namespace UserService.Controllers
     /// Endpoints:
     /// - POST /api/users : create a user and enqueue a "users.created" outbox event.
     /// - GET  /api/users/{id} : retrieve a user by id.
-    /// - POST /api/users/{id}/heartbeat : update user's LastSeenUtc
     /// </remarks>
     [ApiController]
     [Route("api/users")]
@@ -109,9 +112,9 @@ namespace UserService.Controllers
                 });
             }
 
-            var user = new User { Id = Guid.NewGuid(), Name = name, Email = email };
+            var user = new User { Id = Guid.NewGuid(), Name = name, Email = email, Status = UserStatus.Active };
 
-            var evt = new { Id = user.Id, Name = user.Name, Email = user.Email };
+            var evt = new { Id = user.Id, Name = user.Name, Email = user.Email, Status = UserStatus.Active };
             var outbox = new OutboxEntry
             {
                 Id = Guid.NewGuid(),
@@ -211,48 +214,100 @@ namespace UserService.Controllers
                 _logger.LogError(ex, "Error fetching user with Id={UserId}", id);
                 return Problem(detail: "Failed to fetch user.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
-        } 
+        }
 
         /// <summary>
-        /// Record a heartbeat for a user (update LastSeenUtc).
-        /// POST /api/users/{id}/heartbeat
+        /// PATCH /api/users/{id}/status
+        /// Body: { "newStatus": "Inactive", "reason": "manual_admin_action" }
+        /// - 404 if user not found
+        /// - 400 if invalid status
+        /// - 204 if unchanged
+        /// After a successful status change, create an OutboxEntry with UserStatusChangedEvent payload
+        /// so the OutboxDispatcher will publish it to Kafka (topic = users.status-changed).
         /// </summary>
-        [HttpPost("{id:guid}/heartbeat")]
-        [ProducesResponseType(StatusCodes.Status204NoContent)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> Heartbeat(Guid id, CancellationToken cancellationToken)
+        [HttpPatch("{id:guid}/status")]
+        public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UserStatusUpdateDto dto, CancellationToken cancellationToken)
         {
+            if (dto == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid request", Detail = "Request body cannot be empty." });
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.NewStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = "newStatus is required." });
+            }
+
+            // Parse new status using shared UserStatus enum
+            if (!Enum.TryParse<UserStatus>(dto.NewStatus, ignoreCase: true, out var newStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = $"Unknown status '{dto.NewStatus}'." });
+            }
+
             try
             {
                 var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
-                if (user == null)
+                if (user == null) return NotFound();
+
+                var oldStatus = user.Status;
+                if (oldStatus == newStatus)
                 {
-                    _logger.LogInformation("Heartbeat: user not found. Id={UserId}", id);
-                    return NotFound();
+                    _logger.LogInformation("UpdateStatus: no-op for user {UserId}, status already {Status}", id, newStatus);
+                    return NoContent();
                 }
 
-                user.LastSeenUtc = DateTime.UtcNow;
+                // Assign the parsed shared enum directly to the user's Status (User.Status uses Shared.Domain.UserStatus)
+                user.Status = newStatus;
 
+                // create outbox event
+                var evt = new Shared.Domain.Events.UserStatusChangedEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    OccurredAtUtc = DateTime.UtcNow,
+                    UserId = user.Id,
+                    OldStatus = oldStatus,
+                    NewStatus = newStatus,
+                    Reason = dto.Reason
+                };
+
+                var outbox = new OutboxEntry
+                {
+                    Id = Guid.NewGuid(),
+                    EventType = evt.EventType, // "users.status-changed"
+                    AggregateId = user.Id,
+                    Payload = JsonSerializer.Serialize(evt),
+                    RetryCount = 0,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                // Save user and outbox atomically
                 using var saveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 saveCts.CancelAfter(TimeSpan.FromSeconds(15));
 
+                _db.Users.Update(user);
+                _db.OutboxEntries.Add(outbox);
                 await _db.SaveChangesAsync(saveCts.Token);
 
-                _logger.LogInformation("Heartbeat recorded for user {UserId}", id);
+                _logger.LogInformation("User status updated. UserId={UserId} Old={Old} New={New}", user.Id, oldStatus, newStatus);
+
+                // We purposely do NOT publish directly here; we create an OutboxEntry so existing dispatcher reliably publishes the event.
                 return NoContent();
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("Heartbeat cancelled for user {UserId}. TraceId={TraceId}", id, HttpContext?.TraceIdentifier);
+                _logger.LogInformation("UpdateStatus cancelled for user {UserId}", id);
                 return StatusCode(StatusCodes.Status499ClientClosedRequest);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error updating status for user {UserId}", id);
+                return Problem(detail: "Database error while updating user status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error recording heartbeat for user {UserId}. TraceId={TraceId}", id, HttpContext?.TraceIdentifier);
-                return Problem(detail: "Failed to record heartbeat.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+                _logger.LogError(ex, "Unexpected error updating status for user {UserId}", id);
+                return Problem(detail: "Unexpected error while updating user status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
         }
-
     }
 }

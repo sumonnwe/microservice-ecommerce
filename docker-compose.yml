@@ -44,22 +44,6 @@
       kafka:
         condition: service_started
 
-  postgres:
-    image: postgres:15    
-    networks:
-      - app-net
-    container_name: postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ecommerce
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL","pg_isready -U postgres"]
-      interval: 5s
-      retries: 10
-
   userservice:
     build:
       context: ./src

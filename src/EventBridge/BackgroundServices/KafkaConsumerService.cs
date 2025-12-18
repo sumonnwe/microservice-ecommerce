@@ -17,8 +17,7 @@ namespace EventBridge.BackgroundServices
         private readonly ILogger<KafkaConsumerService> _logger;
         private readonly IHubContext<EventHub> _hub;
         private readonly string _bootstrap;
-        // subscribe to cancellations and (optionally) user inactivity for debugging
-        private readonly string[] _topics = new[] { "users.created", "orders.created", "orders.cancelled", "users.inactive", "dead-letter" };
+        private readonly string[] _topics = new[] { "users.created", "orders.created", "dead-letter", "users.status-changed", "orders.cancelled" };
 
         public KafkaConsumerService(ILogger<KafkaConsumerService> logger, IHubContext<EventHub> hub, IConfiguration cfg)
         {
@@ -177,33 +176,6 @@ namespace EventBridge.BackgroundServices
 
                     try
                     {
-                        // Dedicated broadcast for orders.cancelled events
-                        if (string.Equals(cr.Topic, "orders.cancelled", StringComparison.OrdinalIgnoreCase))
-                        {
-                            try
-                            {
-                                await _hub.Clients.All.SendAsync("OrderCancelled", value, cancellationToken: stoppingToken);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogError(ex, "SignalR broadcast for OrderCancelled failed");
-                            }
-                        }
-
-                        // Optional dedicated broadcast for users.inactive (debugging)
-                        if (string.Equals(cr.Topic, "users.inactive", StringComparison.OrdinalIgnoreCase))
-                        {
-                            try
-                            {
-                                await _hub.Clients.All.SendAsync("UserInactive", value, cancellationToken: stoppingToken);
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogError(ex, "SignalR broadcast for UserInactive failed");
-                            }
-                        }
-
-                        // Also keep the generic ReceiveEvent channel for clients that use it
                         await _hub.Clients.All.SendAsync(
                             "ReceiveEvent",
                             cr.Topic,

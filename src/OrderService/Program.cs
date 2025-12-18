@@ -2,15 +2,21 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using OrderService.DI;
 using OrderService.Infrastructure.EF;
+using OrderService.Handlers;
+using OrderService.BackgroundServices;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers(); 
+builder.Services.AddControllers();
 builder.Services.AddOrderService(builder.Configuration);
 
 // In-memory EF provider (fast for dev/tests). NOTE: no migrations with this provider.
 builder.Services.AddDbContext<OrderDbContext>(options =>
     options.UseInMemoryDatabase("OrderService_InMemory"));
+
+// Register handler and Kafka consumer hosted service
+builder.Services.AddScoped<UserStatusChangedHandler>();
+builder.Services.AddHostedService<UserStatusConsumerService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -23,6 +29,7 @@ builder.Services.AddSwaggerGen(c =>
     }
 });
 
+// Keep HTTP client to validate existing logic (still used in Create order).
 builder.Services.AddHttpClient("userservice", client =>
 {
     var baseUrl = builder.Configuration["USER_SERVICE_BASE_URL"] ?? "http://userservice:8080";
@@ -40,7 +47,7 @@ using (var scope = app.Services.CreateScope())
 }
 
 if (app.Environment.IsDevelopment())
-{ 
+{
     app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI();

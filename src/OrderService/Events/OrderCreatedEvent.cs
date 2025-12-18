@@ -9,5 +9,7 @@ namespace OrderService.Events
         public string Product { get; set; } = default!;
         public int Quantity { get; set; }
         public decimal Price { get; set; }
+
+        public string Status { get; set; } = "Pending";
     }
 }

@@ -2,7 +2,6 @@ using Humanizer;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OrderService.Domain.Entities;
 using OrderService.DTOs;
@@ -28,16 +27,13 @@ namespace OrderService.Controllers
         private readonly OrderDbContext _db;
         private readonly ILogger<OrdersController> _logger;
         private readonly IHttpClientFactory? _httpClientFactory;
-        private readonly IConfiguration? _config;
 
         // IHttpClientFactory optional to avoid breaking existing tests that construct controller directly.
-        // Keep IHttpClientFactory as third parameter so existing tests calling (db, logger, httpFactory) continue to work.
-        public OrdersController(OrderDbContext db, ILogger<OrdersController> logger, IHttpClientFactory? httpClientFactory = null, IConfiguration? config = null)
+        public OrdersController(OrderDbContext db, ILogger<OrdersController> logger, IHttpClientFactory? httpClientFactory = null)
         {
             _db = db;
             _logger = logger;
             _httpClientFactory = httpClientFactory;
-            _config = config;
         }
 
         /// <summary>
@@ -118,10 +114,6 @@ namespace OrderService.Controllers
             // Normalize
             var product = dto.Product.Trim();
 
-            var now = DateTime.UtcNow;
-            // configurable TTL (minutes) default 15
-            var ttlMinutes = _config?.GetValue<int>("Orders:ExpirationMinutes", 15) ?? 15;
-
             var order = new Order
             {
                 Id = Guid.NewGuid(),
@@ -129,10 +121,8 @@ namespace OrderService.Controllers
                 Product = product,
                 Quantity = dto.Quantity,
                 Price = dto.Price,
+                Status = OrderStatus.Pending,
 
-                CreatedAtUtc = now,
-                ExpiresAtUtc = now.AddMinutes(ttlMinutes),
-                Status = OrderStatus.PendingPayment
             };
 
             var evt = new
@@ -141,7 +131,8 @@ namespace OrderService.Controllers
                 UserId = order.UserId,
                 Product = order.Product,
                 Quantity = order.Quantity,
-                Price = order.Price
+                Price = order.Price,
+                Status = order.Status,
             };
 
             var outbox = new OutboxEntry

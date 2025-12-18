@@ -24,25 +24,6 @@ namespace OrderService.Infrastructure.EF
                 b.Property(o => o.Product).IsRequired();
                 b.Property(o => o.Quantity).IsRequired();
                 b.Property(o => o.Price).IsRequired();
-
-                // new mappings
-                b.Property(o => o.Status)
-                 .HasConversion<int>()  // store enum as int
-                 .IsRequired();
-
-                b.Property(o => o.CreatedAtUtc)
-                 .IsRequired();
-
-                b.Property(o => o.ExpiresAtUtc)
-                 .IsRequired();
-
-                // index to efficiently query expirations (for background expirations/cancellation)
-                b.HasIndex(o => o.ExpiresAtUtc);
-
-                // RowVersion as concurrency token
-                b.Property(o => o.RowVersion)
-                 .IsRowVersion()
-                 .IsConcurrencyToken();
             });
 
             modelBuilder.Entity<OutboxEntry>(b =>

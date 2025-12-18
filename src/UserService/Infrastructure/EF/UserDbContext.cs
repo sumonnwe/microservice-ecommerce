@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Shared.Domain.Entities;
 using UserService.Domain.Entities;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Shared.Domain; 
 
 namespace UserService.Infrastructure.EF
 {
@@ -11,7 +13,6 @@ namespace UserService.Infrastructure.EF
 
         public DbSet<User> Users { get; set; } = null!;
         public DbSet<OutboxEntry> OutboxEntries { get; set; } = null!;
-         
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -23,15 +24,12 @@ namespace UserService.Infrastructure.EF
                 b.HasKey(x => x.Id);
                 b.Property(x => x.Name).IsRequired();
                 b.Property(x => x.Email).IsRequired();
-                b.Property(x => x.IsActive).IsRequired();
 
-                // LastSeenUtc / InactiveSinceUtc are optional
-                b.Property(x => x.LastSeenUtc).IsRequired(false);
-                b.Property(x => x.InactiveSinceUtc).IsRequired(false);
-
-                // index to speed queries for inactive users
-                b.HasIndex(x => x.InactiveSinceUtc);
-                b.HasIndex(x => x.LastSeenUtc);
+                // Persist enum as string for readability
+                b.Property(x => x.Status)
+                    .HasConversion(new EnumToStringConverter<UserStatus>())
+                    .IsRequired()
+                    .HasDefaultValue(UserStatus.Active);
             });
 
             modelBuilder.Entity<OutboxEntry>(b =>

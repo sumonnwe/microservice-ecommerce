@@ -2,6 +2,14 @@ using System;
 
 namespace OrderService.Domain.Entities
 {
+    public enum OrderStatus
+    {
+        Pending = 0,
+        Completed = 1,
+        Paid = 2,
+        Cancelled = 3
+    }
+
     public class Order
     {
         public Guid Id { get; set; }
@@ -10,23 +18,8 @@ namespace OrderService.Domain.Entities
         public int Quantity { get; set; }
         public decimal Price { get; set; }
 
-        // Domain status with clear states for payment & lifecycle
-        public OrderStatus Status { get; set; } = OrderStatus.PendingPayment;
-
-        // Timestamps for TTL / inactivity cancellation
-        public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-        public DateTime ExpiresAtUtc { get; set; } = DateTime.UtcNow.AddMinutes(15);
-
-        // Concurrency token
-        public byte[] RowVersion { get; set; } = Array.Empty<byte>();
-    }
-
-    public enum OrderStatus
-    {
-        PendingPayment = 0,
-        Ready = 1,
-        Confirmed = 2,
-        Cancelled = 3,
-        Expired = 4
+        // New: status and cancellation timestamp
+        public OrderStatus Status { get; set; } = OrderStatus.Pending;
+        public DateTime? CancelledAtUtc { get; set; }
     }
 }
