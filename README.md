@@ -33,16 +33,15 @@ The system allows creating **Users and Orders**, emitting domain events reliably
 ```mermaid
 flowchart LR
   FE[React Frontend] <--> SB["SignalR Hub<br/>(EventBridge)"]
-  SB <-- Kafka Consume --> K["Kafka Topics<br/>users.created<br/>orders.created<br/>dead-letter"]
+  SB <-- Kafka Consume --> K["Kafka Topics<br/>users.created<br/>users.status-changed<br/>orders.created<br/>orders.cancelled<br/>dead-letter"]
 
   US["UserService<br/>REST API<br/>(Save User + OutboxEntry<br/>in one transaction)"] -->|EF Core SaveChanges| UDB[(User DB)]
   OS["OrderService<br/>REST API<br/>(Save Order + OutboxEntry<br/>in one transaction)"] -->|EF Core SaveChanges| ODB[(Order DB)]
 
-  OD["OutboxDispatcher<br/>Background Worker"] -->|Poll unsent| US
-  OD -->|Poll unsent| OS
-  OD -->|Publish events| K
+  USOP["UserService<br/>OutboxPublisher<br/>BackgroundService"] -->|Publish| K
+  OSOP["OrderService<br/>OutboxPublisher<br/>BackgroundService"] -->|Publish| K
 
-  SB -->|Broadcast events| FE
+  EB -->|SignalR| FE
 ```
 ---
 
@@ -51,19 +50,23 @@ flowchart LR
 #### Services
 - UserService
 -- REST API for user creation.
+-- Change user status (Active / Inactive)
 -- Writes User and OutboxEntry in a single EF Core transaction.
 - OrderService
 -- Same pattern as UserService for orders.
-- OutboxDispatcher
--- Background worker that polls /api/outbox/unsent from services.
--- Publishes events to Kafka.
--- Marks events as sent.
+-- Subscribe to users.status-changed
+-- Cancel pending orders when user becomes inactive
+- Outbox Publisher (In-Service)
+-- Runs as a BackgroundService inside each microservice
+-- Reads local Outbox table
+-- Publishes events to Kafka
+-- No HTTP polling, no central dispatcher
 - Kafka
 -- Event backbone.
--- Topics: users.created, orders.created, dead-letter.
+-- Topics: users.created, orders.created, dead-letter, users.status-changed, orders.cancelled
 - EventBridge
 -- Kafka consumer.
--- Broadcasts events to clients via SignalR.
+-- Broadcasts events to frontend via SignalR.
 - React Frontend
 -- Connects to SignalR.
 -- Displays live event streams.
@@ -79,21 +82,20 @@ sequenceDiagram
   participant Client
   participant UserService
   participant UserDB
-  participant OutboxDispatcher
+  participant UserOutbox as UserService OutboxPublisher
   participant Kafka
   participant EventBridge
   participant Frontend
 
   Client->>UserService: POST /api/users
-  UserService->>UserDB: INSERT User + OutboxEntry (same SaveChanges)
+  UserService->>UserDB: INSERT User + OutboxEntry (same transaction)
   UserDB-->>UserService: Commit OK
   UserService-->>Client: 201 Created
 
   loop every N seconds
-    OutboxDispatcher->>UserService: GET /api/outbox/unsent
-    UserService-->>OutboxDispatcher: OutboxEntry[]
-    OutboxDispatcher->>Kafka: Produce users.created
-    OutboxDispatcher->>UserService: POST /api/outbox/mark-sent/{id}
+    UserOutbox->>UserDB: SELECT unsent OutboxEntry
+    UserOutbox->>Kafka: Produce users.created
+    UserOutbox->>UserDB: Mark OutboxEntry as sent
   end
 
   Kafka-->>EventBridge: Consume users.created
@@ -103,29 +105,23 @@ sequenceDiagram
 
 ### Key Architectural Decisions
 
-1. Transaction Outbox Pattern
 
-**Why**
-- Publishing directly to Kafka inside controllers risks lost or duplicated events if DB commits fail.
-- Outbox ensures atomicity between state change and event creation.
+1. Event-Driven Microservices
+- Services communicate via Kafka
+- No synchronous coupling between UserService and OrderService
+- Easy to add new consumers without changing producers
 
-**Result**
-- At-least-once delivery.
-- Consumers must be idempotent.
+2. Outbox Pattern (In-Service Publisher)
 
-2. Dispatcher-Based Event Publishing
+**Why not a separate OutboxDispatcher service?**
+- Removes tight coupling
+- Fewer network hops
+- No exposed /api/outbox/* operational endpoints
+- Publishing scales naturally with each service
 
-**Current**
-- Central OutboxDispatcher polls services over HTTP.
-- Simple to reason about and easy to demonstrate.
-
-**Alternative (future)**
-- Move dispatcher logic inside each service as a hosted background service.
-- Fewer moving parts, no polling.
-
-3. Event-Driven Communication
-- Kafka decouples producers from consumers.
-- Enables scaling, replay, and independent evolution.
+**Each service**
+- Writes domain data + OutboxEntry in one transaction
+- Publishes asynchronously via background worker
 
 ---
 
@@ -146,6 +142,7 @@ sequenceDiagram
 - EF Core InMemory provider used for demo speed.
 
 **Production upgrade**
+- API authentication/authorization.
 - Replace InMemory with PostgreSQL (Npgsql).
 - Add migrations and real transactional guarantees.
 
@@ -226,8 +223,7 @@ flowchart TB
 | Frontend          | [http://localhost:3000](http://localhost:3000) |
 | EventBridge       | [http://localhost:5005](http://localhost:5005) |
 | UserService       | [http://localhost:5001](http://localhost:5001) |
-| OrderService      | [http://localhost:5002](http://localhost:5002) |
-| OutboxDispatcher  | Background Worker Service                      |
+| OrderService      | [http://localhost:5002](http://localhost:5002) | 
 | Kafka             | [http://localhost:9092](http://localhost:9092) |
 | KafkaUI           | [http://localhost:8085](http://localhost:8085) |
  
@@ -309,7 +305,9 @@ dotnet test
 **Example Test Scope**
 
 - Create User → verifies User + OutboxEntry persisted
-- Create Order → verifies Order + OutboxEntry persisted
+- Create Order → verifies Order + OutboxEntry persisted by validating user existence (id, status - active)
+- Update User Status → triggers order cancellations
+- Frontend SignalR connection → receives events (orders.created, users.created, users.status-changed, orders.cancelled)
 - Invalid payload → returns correct HTTP status
 
 **Future Test Improvements**
