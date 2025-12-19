@@ -1,12 +1,13 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using System;
-using System.Threading;
-using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Shared.Domain;
 using Shared.Domain.Entities;
+using System;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore; 
+using System.Threading;
+using System.Threading.Tasks;
 using UserService.Domain.Entities;
 using UserService.DTOs;
 using UserService.Infrastructure.EF;
@@ -20,6 +21,7 @@ namespace UserService.Controllers
     /// Endpoints:
     /// - POST /api/users : create a user and enqueue a "users.created" outbox event.
     /// - GET  /api/users/{id} : retrieve a user by id.
+    /// - PATCH /api/users/{id}/status : update user status (creates outbox event users.status-changed)
     /// </remarks>
     [ApiController]
     [Route("api/users")]
@@ -27,12 +29,12 @@ namespace UserService.Controllers
     public class UsersController : ControllerBase
     {
         private readonly UserDbContext _db;
-        private readonly ILogger<UsersController> _logger; 
+        private readonly ILogger<UsersController> _logger;
 
         public UsersController(UserDbContext db, ILogger<UsersController> logger)
         {
             _db = db;
-            _logger = logger; 
+            _logger = logger;
         }
 
         /// <summary>
@@ -218,14 +220,27 @@ namespace UserService.Controllers
 
         /// <summary>
         /// PATCH /api/users/{id}/status
-        /// Body: { "newStatus": "Inactive", "reason": "manual_admin_action" }
-        /// - 404 if user not found
-        /// - 400 if invalid status
-        /// - 204 if unchanged
-        /// After a successful status change, create an OutboxEntry with UserStatusChangedEvent payload
-        /// so the OutboxDispatcher will publish it to Kafka (topic = users.status-changed).
+        /// Update the user's status and append an OutboxEntry with an <c>users.status-changed</c> event.
         /// </summary>
+        /// <param name="id">User id (GUID)</param>
+        /// <param name="dto">Payload containing the target status and optional reason.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
+        /// <remarks>
+        /// - Validates that <c>NewStatus</c> maps to a defined <see cref="UserStatus"/> enum value.
+        /// - Ensures the user exists.
+        /// - If the requested status equals the current status the call is a no-op and returns 204.
+        /// </remarks>
+        /// <response code="204">Status updated (or no-op when identical).</response>
+        /// <response code="400">Invalid payload or unknown status.</response>
+        /// <response code="404">User not found.</response>
+        /// <response code="499">Request cancelled.</response>
+        /// <response code="500">Server error while updating status.</response>
         [HttpPatch("{id:guid}/status")]
+        [Consumes("application/json")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UserStatusUpdateDto dto, CancellationToken cancellationToken)
         {
             if (dto == null)
@@ -238,8 +253,9 @@ namespace UserService.Controllers
                 return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = "newStatus is required." });
             }
 
-            // Parse new status using shared UserStatus enum
-            if (!Enum.TryParse<UserStatus>(dto.NewStatus, ignoreCase: true, out var newStatus))
+            // Parse and validate new status
+            if (!Enum.TryParse<UserStatus>(dto.NewStatus, ignoreCase: true, out var newStatus) ||
+                !Enum.IsDefined(typeof(UserStatus), newStatus))
             {
                 return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = $"Unknown status '{dto.NewStatus}'." });
             }
@@ -247,7 +263,7 @@ namespace UserService.Controllers
             try
             {
                 var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
-                if (user == null) return NotFound();
+                if (user == null) return NotFound(new ProblemDetails { Title = "Not found", Detail = "User not found." });
 
                 var oldStatus = user.Status;
                 if (oldStatus == newStatus)
@@ -256,10 +272,11 @@ namespace UserService.Controllers
                     return NoContent();
                 }
 
-                // Assign the parsed shared enum directly to the user's Status (User.Status uses Shared.Domain.UserStatus)
+                // Optional: enforce allowed transitions here (example commented)
+                // if (!IsTransitionAllowed(oldStatus, newStatus)) return BadRequest(new ProblemDetails { Title = "Invalid transition", Detail = "Requested status transition is not allowed." });
+
                 user.Status = newStatus;
 
-                // create outbox event
                 var evt = new Shared.Domain.Events.UserStatusChangedEvent
                 {
                     EventId = Guid.NewGuid(),
@@ -308,6 +325,6 @@ namespace UserService.Controllers
                 _logger.LogError(ex, "Unexpected error updating status for user {UserId}", id);
                 return Problem(detail: "Unexpected error while updating user status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
-        }
+        } 
     }
 }

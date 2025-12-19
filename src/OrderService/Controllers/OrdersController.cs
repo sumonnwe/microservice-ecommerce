@@ -5,7 +5,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OrderService.Domain.Entities;
 using OrderService.DTOs;
+using OrderService.Events;
 using OrderService.Infrastructure.EF;
+using Shared.Domain;
 using Shared.Domain.Entities;
 using System;
 using System.Net;
@@ -91,7 +93,7 @@ namespace OrderService.Controllers
                     if (!userExists)
                     {
                         _logger.LogWarning("User validation failed: user not found. UserId={UserId}", dto.UserId);
-                        return BadRequest(new ProblemDetails { Title = "Invalid user", Detail = "User does not exist." });
+                        return BadRequest(new ProblemDetails { Title = "Invalid user", Detail = "User does not exist or is not active." });
                     }
                 }
                 catch (HttpRequestException ex)
@@ -223,7 +225,141 @@ namespace OrderService.Controllers
             }
         }
 
-        // Attempts to call UserService GET /api/users/{id}. Returns true if user exists (200), false if 404.
+        /// <summary>
+        /// PATCH /api/orders/{id}/status
+        /// Update the order's status and append an OutboxEntry with an <c>orders.status-changed</c> event.
+        /// </summary>
+        /// <param name="id">Order id (GUID)</param>
+        /// <param name="dto">Payload containing the target status and optional reason.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
+        /// <remarks>
+        /// - Validates that <c>NewStatus</c> maps to a defined <see cref="OrderStatus"/> enum value.
+        /// - Ensures the order exists.
+        /// - Ensures the order's associated user exists and is <c>Active</c> (when remote validation is available).
+        /// - If the requested status equals the current status the call is a no-op and returns 204.
+        /// </remarks>
+        /// <response code="204">Status updated (or no-op when identical).</response>
+        /// <response code="400">Invalid payload, unknown status, or user not found/not active.</response>
+        /// <response code="404">Order not found.</response>
+        /// <response code="499">Request cancelled.</response>
+        /// <response code="500">Server error while updating status.</response>
+        [HttpPatch("{id:guid}/status")]
+        [Consumes("application/json")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] OrderStatusUpdateDto dto, CancellationToken cancellationToken)
+        {
+            if (dto == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid request", Detail = "Request body cannot be empty." });
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.NewStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = "newStatus is required." });
+            }
+
+            // Parse new status using OrderStatus enum
+            if (!Enum.TryParse<OrderStatus>(dto.NewStatus, ignoreCase: true, out var newStatus) ||
+                !Enum.IsDefined(typeof(OrderStatus), newStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = $"Unknown status '{dto.NewStatus}'." });
+            }
+
+            try
+            {
+                var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == id, cancellationToken);
+                if (order == null) return NotFound(new ProblemDetails { Title = "Not found", Detail = "Order not found." });
+
+                // Validate that the order's user exists and is Active (when remote validation is available)
+                if (_httpClientFactory != null)
+                {
+                    try
+                    {
+                        var userValid = await ValidateUserExistsAsync(order.UserId, cancellationToken);
+                        if (!userValid)
+                        {
+                            _logger.LogWarning("Order update denied because associated user is missing or not active. OrderId={OrderId} UserId={UserId}", order.Id, order.UserId);
+                            return BadRequest(new ProblemDetails { Title = "Invalid user", Detail = "Associated user does not exist or is not active." });
+                        }
+                    }
+                    catch (HttpRequestException ex)
+                    {
+                        _logger.LogError(ex, "Failed to validate associated user for OrderId={OrderId} UserId={UserId}", order.Id, order.UserId);
+                        return Problem(detail: "Unable to validate associated user at this time.", statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+                }
+
+                var oldStatus = order.Status;
+                if (oldStatus == newStatus)
+                {
+                    _logger.LogInformation("UpdateStatus: no-op for order {OrderId}, status already {Status}", id, newStatus);
+                    return NoContent();
+                }
+
+                // Optional: enforce allowed transitions here (example commented)
+                // if (!IsTransitionAllowed(oldStatus, newStatus)) return BadRequest(new ProblemDetails { Title = "Invalid transition", Detail = "Requested status transition is not allowed." });
+
+                order.Status = newStatus;
+                // Example: track cancellation time when cancelled
+                if (newStatus == OrderStatus.Cancelled)
+                    order.CancelledAtUtc = DateTime.UtcNow;
+                else
+                    order.CancelledAtUtc = null;
+
+                var evt = new OrderStatusChangedEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    OccurredAtUtc = DateTime.UtcNow,
+                    OrderId = order.Id,
+                    OldStatus = oldStatus,
+                    NewStatus = newStatus,
+                    Reason = dto.Reason
+                };
+
+                var outbox = new OutboxEntry
+                {
+                    Id = Guid.NewGuid(),
+                    EventType = evt.EventType,
+                    AggregateId = order.Id,
+                    Payload = JsonSerializer.Serialize(evt),
+                    RetryCount = 0,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                // Save order and outbox atomically
+                using var saveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                saveCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+                _db.Orders.Update(order);
+                _db.OutboxEntries.Add(outbox);
+                await _db.SaveChangesAsync(saveCts.Token);
+
+                _logger.LogInformation("Order status updated. OrderId={OrderId} Old={Old} New={New}", order.Id, oldStatus, newStatus);
+
+                // We do not publish here; the OutboxPublisher/dispatcher will handle publishing.
+                return NoContent();
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("UpdateStatus cancelled for order {OrderId}", id);
+                return StatusCode(StatusCodes.Status499ClientClosedRequest);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error updating status for order {OrderId}", id);
+                return Problem(detail: "Database error while updating order status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error updating status for order {OrderId}", id);
+                return Problem(detail: "Unexpected error while updating order status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+            }
+        }
+
+        // Attempts to call UserService GET /api/users/{id}. Returns true if user exists (200) and is Active, false if 404 or not Active.
         private async Task<bool> ValidateUserExistsAsync(Guid userId, CancellationToken cancellationToken)
         {
             _logger.LogInformation("Validate User ID at https://userservice:8080/api/users/{userId}", userId);
@@ -233,9 +369,6 @@ namespace OrderService.Controllers
             var client = _httpClientFactory.CreateClient();
 
             // Determine base address:
-            // - prefer client's BaseAddress if configured
-            // - fallback to environment variable USER_SERVICE_BASE_URL
-            // - final fallback to docker-style host name "http://userservice:8080"
             var baseUrl = client.BaseAddress?.ToString().TrimEnd('/') ??
                           Environment.GetEnvironmentVariable("USER_SERVICE_BASE_URL") ??
                           "http://userservice:8080";
@@ -244,9 +377,80 @@ namespace OrderService.Controllers
 
             using var req = new HttpRequestMessage(HttpMethod.Get, requestUrl);
 
-            var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
-            if (resp.StatusCode == HttpStatusCode.OK) return true;
+            if (resp.StatusCode == HttpStatusCode.OK)
+            {
+                // When the user exists, require its Status == Active.
+                // Read and inspect the response body; expected JSON may include a "status" property
+                // that can be either string (e.g. "Active") or numeric (e.g. 0).
+                try
+                {
+                    var content = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(content))
+                    {
+                        using var doc = JsonDocument.Parse(content);
+                        if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                            doc.RootElement.TryGetProperty("status", out var statusProp))
+                        {
+                            // Handle string and numeric status representations
+                            if (statusProp.ValueKind == JsonValueKind.String)
+                            {
+                                var statusRaw = statusProp.GetString();
+                                if (!string.IsNullOrWhiteSpace(statusRaw) &&
+                                    Enum.TryParse<UserStatus>(statusRaw, ignoreCase: true, out var status))
+                                {
+                                    return status == UserStatus.Active;
+                                }
+
+                                _logger.LogWarning("Unable to parse 'status' (string) from UserService response for UserId={UserId}: {Raw}", userId, statusRaw);
+                                return false; // conservative
+                            }
+
+                            if (statusProp.ValueKind == JsonValueKind.Number)
+                            {
+                                if (statusProp.TryGetInt32(out var statusInt))
+                                {
+                                    try
+                                    {
+                                        var statusEnum = (UserStatus)statusInt;
+                                        if (Enum.IsDefined(typeof(UserStatus), statusEnum))
+                                            return statusEnum == UserStatus.Active;
+
+                                        _logger.LogWarning("Numeric 'status' value from UserService is not a defined UserStatus for UserId={UserId}: {Value}", userId, statusInt);
+                                        return false;
+                                    }
+                                    catch
+                                    {
+                                        _logger.LogWarning("Failed to convert numeric 'status' to UserStatus for UserId={UserId}: {Value}", userId, statusInt);
+                                        return false;
+                                    }
+                                }
+
+                                _logger.LogWarning("Numeric 'status' present but could not be read as Int32 for UserId={UserId}.", userId);
+                                return false;
+                            }
+
+                            // Unexpected type for status property -> conservative
+                            _logger.LogWarning("Unexpected JSON token for 'status' property for UserId={UserId}: {Kind}", userId, statusProp.ValueKind);
+                            return false;
+                        }
+
+                        // No status property found — lenient fallback: assume user exists
+                        _logger.LogWarning("No 'status' property present in UserService response for UserId={UserId}. Assuming user exists.", userId);
+                        return true;
+                    }
+
+                    _logger.LogWarning("Empty body returned from UserService for UserId={UserId}. Assuming user exists.", userId);
+                    return true;
+                }
+                catch (JsonException jex)
+                {
+                    _logger.LogWarning(jex, "Failed to parse JSON from UserService response while validating UserId={UserId}. Assuming user exists.", userId);
+                    return true;
+                }
+            }
+
             if (resp.StatusCode == HttpStatusCode.NotFound) return false;
 
             // treat other statuses as transient errors

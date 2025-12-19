@@ -1,7 +1,6 @@
 ﻿using FluentAssertions;
 using Moq;
 using NUnit.Framework;
-using OutboxDispatcher.Worker;
 using Shared.Domain.Entities;
 using Shared.Domain.Services;
 using System;

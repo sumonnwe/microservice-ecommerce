@@ -1,15 +1,8 @@
 using System;
+using Shared.Domain;
 
 namespace OrderService.Domain.Entities
 {
-    public enum OrderStatus
-    {
-        Pending = 0,
-        Completed = 1,
-        Paid = 2,
-        Cancelled = 3
-    }
-
     public class Order
     {
         public Guid Id { get; set; }

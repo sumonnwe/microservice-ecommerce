@@ -16,12 +16,11 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
     <PackageReference Include="DotNet.Testcontainers" Version="1.6.0" />
-    <PackageReference Include="Confluent.Kafka" Version="2.5.0" />
+    <PackageReference Include="Confluent.Kafka" Version="2.12.0" />
   </ItemGroup>
   
   <ItemGroup>
-    <!-- Reference your API / service project -->
-    <ProjectReference Include="..\..\src\OutboxDispatcher\OutboxDispatcher.csproj" />
+    <!-- Reference your API / service project --> 
     <ProjectReference Include="..\..\src\UserService\UserService.csproj" />
   </ItemGroup>
 

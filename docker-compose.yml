@@ -82,26 +82,6 @@
       kafka:
         condition: service_started
 
-  outboxdispatcher:
-    build:
-      context: ./src
-      dockerfile: ./OutboxDispatcher/Dockerfile
-    container_name: outboxdispatcher
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - OTEL_EXPORTER_JAEGER_ENDPOINT=http://jaeger:14268/api/traces
-      # Use internal service ports (containers talk to each other on these)
-      - OUTBOX_SERVICES=http://userservice:8080,http://orderservice:8080
-    networks:
-      - app-net
-    depends_on:
-      kafka:
-        condition: service_started
-      userservice:
-        condition: service_started
-      orderservice:
-        condition: service_started
-
   eventbridge:
     build:
       context: ./src/EventBridge

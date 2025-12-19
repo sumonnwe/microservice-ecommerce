@@ -10,23 +10,8 @@ using NUnit.Framework;
 using OrderService.Domain.Entities;
 using OrderService.Handlers;
 using OrderService.Infrastructure.EF;
-using Shared.Domain.Events;
-using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
-using NUnit.Framework;
-using OrderService.Domain.Entities;
-using OrderService.Handlers;
-using OrderService.Infrastructure.EF;
-using Shared.Domain.Events;
-using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
-using NUnit.Framework;
-using OrderService.Domain.Entities;
-using OrderService.Handlers;
-using OrderService.Infrastructure.EF;
-using Shared.Domain.Events;
+using Shared.Domain.Events; 
+using Shared.Domain; 
 
 namespace OrderService.Tests.Application
 {

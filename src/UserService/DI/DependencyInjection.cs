@@ -1,10 +1,12 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using UserService.Application;
 using UserService.Infrastructure.EF;
 using Shared.Domain.Services;
-using UserService.Application;
-using UserService.Infrastructure.Kafka;
+using Shared.OutboxPublisher.DI;
+using Shared.OutboxPublisher.Abstractions;
+ 
 
 namespace UserService.DI
 {
@@ -15,7 +17,12 @@ namespace UserService.DI
             services.AddDbContext<UserDbContext>(opt => opt.UseInMemoryDatabase("userdb"));
             services.AddScoped<IOutboxRepository, OutboxRepository>();
             services.AddScoped<UserAppService>();
-            services.AddSingleton<Shared.Domain.Services.IKafkaProducer>(_ => new KafkaProducer(configuration));
+            //services.AddSingleton<Shared.Domain.Services.IKafkaProducer>(_ => new KafkaProducer(configuration));
+
+            // Register Shared Outbox Publisher and the EF-backed store adapter for this service
+            services.AddOutboxPublisher(opts => configuration.GetSection("Outbox").Bind(opts));
+            services.AddScoped<IOutboxStore, OutboxStore>();
+
             // Background dispatcher is not added here; OutboxDispatcher project will poll this service via HTTP
             return services;
         }

@@ -11,6 +11,7 @@ using OrderService.Controllers;
 using OrderService.DTOs;
 using OrderService.Domain.Entities;
 using OrderService.Infrastructure.EF;
+using Shared.Domain;
 using Shared.Domain.Entities;
 
 namespace OrderService.Tests.Integration;
@@ -120,5 +121,127 @@ public class OrderIntegrationTests
         Assert.That(returned, Is.Not.Null);
         Assert.That(returned!.Id, Is.EqualTo(order.Id));
         Assert.That(returned.Product, Is.EqualTo("Seeded"));
+    }
+
+    // --- New tests for the status update endpoint ---
+
+    [Test]
+    public async Task UpdateStatus_ValidChange_UpdatesOrderAndCreatesOutbox()
+    {
+        // Arrange
+        var options = new DbContextOptionsBuilder<OrderDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        await using var db = new OrderDbContext(options);
+
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            Product = "Widget",
+            Quantity = 1,
+            Price = 9.99m,
+            Status = OrderStatus.Pending
+        };
+
+        db.Orders.Add(order);
+        await db.SaveChangesAsync();
+
+        var logger = new Mock<ILogger<OrdersController>>();
+        var controller = new OrdersController(db, logger.Object);
+
+        var dto = new OrderStatusUpdateDto { NewStatus = "Completed", Reason = "payment_confirmed" };
+
+        // Act
+        var result = await controller.UpdateStatus(order.Id, dto, CancellationToken.None);
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<NoContentResult>());
+
+        var updatedOrder = await db.Orders.FindAsync(order.Id);
+        Assert.That(updatedOrder, Is.Not.Null);
+        Assert.That(updatedOrder!.Status, Is.EqualTo(OrderStatus.Completed));
+
+        var outbox = db.OutboxEntries.SingleOrDefault(e => e.AggregateId == order.Id);
+        Assert.That(outbox, Is.Not.Null);
+        Assert.That(outbox!.EventType, Is.EqualTo("orders.status-changed"));
+        StringAssert.Contains("\"OrderId\"", outbox.Payload);
+        StringAssert.Contains("\"NewStatus\"", outbox.Payload);
+    }
+
+    [Test]
+    public async Task UpdateStatus_SameStatus_NoOp_NoOutboxCreated()
+    {
+        // Arrange
+        var options = new DbContextOptionsBuilder<OrderDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        await using var db = new OrderDbContext(options);
+
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            Product = "Widget",
+            Quantity = 1,
+            Price = 9.99m,
+            Status = OrderStatus.Completed
+        };
+
+        db.Orders.Add(order);
+        await db.SaveChangesAsync();
+
+        var logger = new Mock<ILogger<OrdersController>>();
+        var controller = new OrdersController(db, logger.Object);
+
+        var dto = new OrderStatusUpdateDto { NewStatus = "Completed", Reason = "duplicate" };
+
+        // Act
+        var result = await controller.UpdateStatus(order.Id, dto, CancellationToken.None);
+
+        // Assert - no-op returns NoContent and no outbox entry is created
+        Assert.That(result, Is.InstanceOf<NoContentResult>());
+
+        var outboxExists = db.OutboxEntries.Any(e => e.AggregateId == order.Id);
+        Assert.That(outboxExists, Is.False);
+    }
+
+    [Test]
+    public async Task UpdateStatus_InvalidStatus_ReturnsBadRequest()
+    {
+        // Arrange
+        var options = new DbContextOptionsBuilder<OrderDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        await using var db = new OrderDbContext(options);
+
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            Product = "Widget",
+            Quantity = 1,
+            Price = 9.99m,
+            Status = OrderStatus.Pending
+        };
+
+        db.Orders.Add(order);
+        await db.SaveChangesAsync();
+
+        var logger = new Mock<ILogger<OrdersController>>();
+        var controller = new OrdersController(db, logger.Object);
+
+        var dto = new OrderStatusUpdateDto { NewStatus = "NotARealStatus", Reason = "bad" };
+
+        // Act
+        var result = await controller.UpdateStatus(order.Id, dto, CancellationToken.None);
+
+        // Assert
+        Assert.That(result, Is.InstanceOf<ObjectResult>());
+        var obj = (ObjectResult)result;
+        Assert.That(obj.StatusCode, Is.EqualTo(400));
     }
 }

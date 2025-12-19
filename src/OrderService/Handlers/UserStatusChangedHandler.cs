@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Shared.Domain;
 using Shared.Domain.Events;
 using Shared.Domain.Entities;
 using OrderService.Infrastructure.EF;
