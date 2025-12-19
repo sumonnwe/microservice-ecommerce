@@ -1,5 +1,6 @@
 ﻿using Confluent.Kafka;
 using Confluent.Kafka.Admin;
+using EventBridge.Configuration;
 using EventBridge.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -17,13 +18,23 @@ namespace EventBridge.BackgroundServices
         private readonly ILogger<KafkaConsumerService> _logger;
         private readonly IHubContext<EventHub> _hub;
         private readonly string _bootstrap;
-        private readonly string[] _topics = new[] { "users.created", "orders.created", "dead-letter", "users.status-changed", "orders.cancelled" };
+        private readonly string[] _topics;
+        private readonly string _groupId;
 
         public KafkaConsumerService(ILogger<KafkaConsumerService> logger, IHubContext<EventHub> hub, IConfiguration cfg)
         {
             _logger = logger;
             _hub = hub;
-            _bootstrap = cfg["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
+
+            // Bind Kafka section to options (appsettings.json -> "Kafka")
+            var kafkaOptions = cfg.GetSection("Kafka").Get<KafkaOptions>();
+
+            // Allow environment override for bootstrap (keeps existing behavior), otherwise use configured value
+            _bootstrap = cfg["KAFKA_BOOTSTRAP_SERVERS"] ?? kafkaOptions.BootstrapServers ?? "kafka:9092";
+
+            // Topics and GroupId come from configuration
+            _topics = kafkaOptions.Topics ?? new[] { "users.created", "orders.created", "dead-letter", "users.status-changed", "orders.cancelled" };
+            _groupId = kafkaOptions.GroupId ?? "eventBridge-group";
         }
 
         // (only the ExecuteAsync method body is shown — replace the existing metadata wait loop)
@@ -35,7 +46,7 @@ namespace EventBridge.BackgroundServices
                 BootstrapServers = _bootstrap,
 
                 // make group stable / configurable so it appears in Kafka UI
-                GroupId = "eventBridge-group",
+                GroupId = _groupId,
 
                 AutoOffsetReset = AutoOffsetReset.Earliest,
 
@@ -60,7 +71,16 @@ namespace EventBridge.BackgroundServices
                 _logger.LogInformation("Kafka bootstrap servers: {bootstrap}", _bootstrap);
 
                 // Subscribe early so partition assignment behaviour is correct, but wait for topics/broker availability before consuming.
-                consumer.Subscribe(_topics);
+                if (string.IsNullOrWhiteSpace(_bootstrap) || string.IsNullOrWhiteSpace(_groupId) || _topics.Length == 0)
+                {
+                    _logger.LogError("Invalid Kafka configuration; aborting Subscribe. Bootstrap/GroupId/Topics must be non-empty.");
+                    // Decide: throw, skip subscription, or use safe defaults
+                }
+                else
+                {
+                    // Ensure we pass an IEnumerable<string> (ToList removes any potential overload ambiguity)
+                    consumer.Subscribe(_topics);
+                }
 
                 // Create an admin client to fetch metadata (AdminClient exposes GetMetadata) and optionally create topics.
                 using var admin = new AdminClientBuilder(conf).Build();

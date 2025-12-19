@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using Shared.Domain.Events;
+using OrderService.Configuration;
 
 namespace OrderService.BackgroundServices
 {
@@ -27,6 +28,10 @@ namespace OrderService.BackgroundServices
         private readonly IConfiguration _configuration;
         private IConsumer<string, string>? _consumer;
 
+        private readonly string _bootstrap;
+        private readonly string[] _topics;
+        private readonly string _groupId;
+
         public UserStatusConsumerService(ILogger<UserStatusConsumerService> logger,
                                          IServiceProvider serviceProvider,
                                          IConfiguration configuration)
@@ -34,32 +39,165 @@ namespace OrderService.BackgroundServices
             _logger = logger;
             _serviceProvider = serviceProvider;
             _configuration = configuration;
+
+            // Read Kafka config defensively so readonly fields are initialized.
+            var kafkaSection = _configuration.GetSection("Kafka");
+            OrderService.Configuration.KafkaOptions? kafkaOptions = null;
+            try
+            {
+                if (kafkaSection.Exists())
+                {
+                    kafkaOptions = kafkaSection.Get<OrderService.Configuration.KafkaOptions>();
+                }
+            }
+            catch
+            {
+                // ignore binding errors; we'll fall back to defaults below
+            }
+
+            _bootstrap = _configuration["KAFKA_BOOTSTRAP_SERVERS"]
+                         ?? kafkaOptions?.BootstrapServers
+                         ?? _configuration["Kafka:BootstrapServers"]
+                         ?? "kafka:9092";
+
+            // Topics: prefer explicit array from configuration or KafkaOptions; fall back to legacy single keys or defaults.
+            if (kafkaOptions?.Topics != null && kafkaOptions.Topics.Length > 0)
+            {
+                _topics = kafkaOptions.Topics;
+            }
+            else
+            {
+                var topicsSection = _configuration.GetSection("Kafka:Topics");
+                if (topicsSection.Exists())
+                {
+                    _topics = topicsSection.Get<string[]>() ?? new[] { "users.status-changed" };
+                }
+                else
+                {
+                    var single = _configuration["Kafka:Topics:UserStatusChanged"]
+                                 ?? _configuration["Kafka:Topic"]
+                                 ?? _configuration["KAFKA_TOPICS"]
+                                 ?? "users.status-changed";
+
+                    _topics = single.Contains(',')
+                        ? single.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        : new[] { single };
+                }
+            }
+
+            _groupId = _configuration["Kafka:GroupId"]
+                       ?? kafkaOptions?.GroupId
+                       ?? _configuration["Kafka:UserStatusConsumerGroup"]
+                       ?? "orderService-group";
         }
 
         public override Task StartAsync(CancellationToken cancellationToken)
         {
-            var bootstrap = _configuration["Kafka:BootstrapServers"]
-                            ?? _configuration["KAFKA_BOOTSTRAP_SERVERS"]
-                            ?? "kafka:9092";
+            // Log startup config for easier debugging.
+            _logger.LogInformation("Kafka bootstrap={Bootstrap} groupId={GroupId} topics=[{Topics}]",
+                _bootstrap, _groupId, string.Join(";", _topics));
+
+            // Quick validation of topics to avoid immediate librdkafka rejection.
+            var invalid = _topics.Where(t =>
+                string.IsNullOrWhiteSpace(t) ||
+                t == "." || t == ".." ||
+                t.Length > 249 ||
+                t.IndexOfAny(new[] { ' ', '/', '\\' }) >= 0
+            ).ToArray();
+
+            if (invalid.Length > 0)
+            {
+                _logger.LogWarning("Invalid Kafka topic names detected: {Invalid}. Consumer will not subscribe.", string.Join(", ", invalid));
+                return base.StartAsync(cancellationToken);
+            }
+
+            // Quick TCP check to provide actionable logs; do not throw to avoid stopping the host.
+            bool TcpConnectTest(string host, int port, TimeSpan timeout)
+            {
+                try
+                {
+                    using var tcp = new System.Net.Sockets.TcpClient();
+                    var ar = tcp.BeginConnect(host, port, null, null);
+                    var ok = ar.AsyncWaitHandle.WaitOne(timeout);
+                    if (!ok) return false;
+                    tcp.EndConnect(ar);
+                    return true;
+                }
+                catch { return false; }
+            }
+
+            var parts = _bootstrap.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var host = parts.Length > 0 ? parts[0] : "kafka";
+            var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9092;
+
+            if (!TcpConnectTest(host, port, TimeSpan.FromSeconds(3)))
+            {
+                _logger.LogWarning("TCP connect to Kafka bootstrap {Bootstrap} FAILED. Check Docker network / DNS / advertised.listeners / port mapping. Consumer will not subscribe now.", _bootstrap);
+                return base.StartAsync(cancellationToken);
+            }
+
+            // Build a consumer and subscribe — still guarded with try/catch to avoid crashing host.
+            try
+            {
+                var conf = new ConsumerConfig
+                {
+                    BootstrapServers = _bootstrap,
+                    GroupId = _groupId,
+                    AutoOffsetReset = AutoOffsetReset.Earliest,
+                    EnableAutoCommit = false
+                };
+
+                _consumer = new ConsumerBuilder<string, string>(conf)
+                    .SetErrorHandler((_, e) => _logger.LogError("Kafka consumer error: {Reason}", e.Reason))
+                    .SetPartitionsAssignedHandler((c, parts) =>
+                        _logger.LogInformation("Assigned partitions: {Parts}", string.Join(", ", parts)))
+                    .SetPartitionsRevokedHandler((c, parts) =>
+                        _logger.LogInformation("Revoked partitions: {Parts}", string.Join(", ", parts)))
+                    .Build();
+
+                _consumer.Subscribe(_topics);
+                _logger.LogInformation("UserStatusConsumerService subscribed to topics: {Topics} (bootstrap: {Bootstrap})", string.Join(", ", _topics), _bootstrap);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to create/subscribe consumer. Consumer will not be active; check Kafka bootstrap and topic names. Host will remain running.");
+                // ensure no partially initialized consumer remains
+                try
+                {
+                    _consumer?.Close();
+                    _consumer?.Dispose();
+                }
+                catch { }
+                _consumer = null;
+            }
+
+            return base.StartAsync(cancellationToken);
+        }
+
+        private (string bootstrap, string groupId, string[] topics) ReadKafkaConfig()
+        {
+            // Provide runtime read for ExecuteAsync retries (will fallback to fields set in ctor)
+            var kafkaSection = _configuration.GetSection("Kafka");
+            OrderService.Configuration.KafkaOptions? kafkaOptions = null;
+            try
+            {
+                if (kafkaSection.Exists())
+                {
+                    kafkaOptions = kafkaSection.Get<OrderService.Configuration.KafkaOptions>();
+                }
+            }
+            catch { }
+
+            var bootstrap = _configuration["KAFKA_BOOTSTRAP_SERVERS"]
+                    ?? kafkaOptions?.BootstrapServers
+                    ?? _bootstrap
+                    ?? "kafka:9092";
 
             var groupId = _configuration["Kafka:GroupId"]
-                          ?? _configuration["Kafka:UserStatusConsumerGroup"]
+                          ?? kafkaOptions?.GroupId
+                          ?? _groupId
                           ?? "order-service-user-status-consumer";
 
-            var conf = new ConsumerConfig
-            {
-                BootstrapServers = bootstrap,
-                GroupId = groupId,
-                AutoOffsetReset = AutoOffsetReset.Earliest,
-                EnableAutoCommit = false
-            };
-
-            _consumer = new ConsumerBuilder<string, string>(conf).SetErrorHandler((_, e) =>
-            {
-                _logger.LogError("Kafka consumer error: {Reason}", e.Reason);
-            }).Build();
-
-            // Read topics from configuration. Accept either an array under Kafka:Topics or the legacy single key.
             string[] topics;
             var topicsSection = _configuration.GetSection("Kafka:Topics");
             if (topicsSection.Exists())
@@ -69,173 +207,186 @@ namespace OrderService.BackgroundServices
             else
             {
                 var single = _configuration["Kafka:Topics:UserStatusChanged"]
-                             ?? _configuration["Kafka:Topic"] // additional fallback
+                             ?? _configuration["Kafka:Topic"]
+                             ?? _configuration["KAFKA_TOPICS"]
                              ?? "users.status-changed";
-                topics = new[] { single };
+                topics = single.Contains(',')
+                    ? single.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    : new[] { single };
             }
 
-            // Wait for broker and topics to be available before subscribing (reduces noisy logs and avoids immediate connection refused).
+            return (bootstrap, groupId, topics);
+        }
+
+        private static bool TcpConnectTest(string host, int port, TimeSpan timeout)
+        {
             try
             {
-                using var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = bootstrap }).Build();
-                var waitTimeout = TimeSpan.FromSeconds(60);
-                var pollInterval = TimeSpan.FromSeconds(2);
-                var sw = Stopwatch.StartNew();
+                using var tcp = new System.Net.Sockets.TcpClient();
+                var ar = tcp.BeginConnect(host, port, null, null);
+                var ok = ar.AsyncWaitHandle.WaitOne(timeout);
+                if (!ok) return false;
+                tcp.EndConnect(ar);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
-                while (!cancellationToken.IsCancellationRequested)
+        private bool ValidateTopics(string[] topics, out string[] invalid)
+        {
+            invalid = topics.Where(t =>
+                string.IsNullOrWhiteSpace(t) ||
+                t == "." || t == ".." ||
+                t.Length > 249 ||
+                t.IndexOfAny(new[] { ' ', '/', '\\' }) >= 0
+            ).ToArray();
+
+            return invalid.Length == 0;
+        }
+
+        private bool TryCreateAndSubscribeConsumer(string bootstrap, string groupId, string[] topics)
+        {
+            try
+            {
+                var conf = new ConsumerConfig
                 {
-                    try
-                    {
-                        var md = admin.GetMetadata(TimeSpan.FromSeconds(5));
-                        _logger.LogInformation("Kafka metadata brokers: {Brokers}", string.Join(", ", md.Brokers.Select(b => $"{b.BrokerId}:{b.Host}:{b.Port}")));
-                        foreach (var b in md.Brokers)
-                        {
-                            _logger.LogInformation("Broker {Id} => {Host}:{Port}", b.BrokerId, b.Host, b.Port);
-                        }
-                        if (md?.Brokers == null || md.Brokers.Count == 0)
-                        {
-                            _logger.LogWarning("No Kafka brokers available yet at {Bootstrap}. Retrying...", bootstrap);
-                        }
-                        else
-                        {
-                            var missing = topics.Where(t =>
-                                !md.Topics.Any(x => string.Equals(x.Topic, t, StringComparison.OrdinalIgnoreCase) && !x.Error.IsError)
-                            ).ToArray();
+                    BootstrapServers = bootstrap,
+                    GroupId = groupId,
+                    AutoOffsetReset = AutoOffsetReset.Earliest,
+                    EnableAutoCommit = false
+                };
 
-                            if (!missing.Any())
-                            {
-                                _logger.LogInformation("Kafka reachable and topics available: {Topics}", string.Join(", ", topics));
-                                break;
-                            }
+                _consumer = new ConsumerBuilder<string, string>(conf)
+                    .SetErrorHandler((_, e) => _logger.LogError("Kafka consumer error: {Reason}", e.Reason))
+                    .SetPartitionsAssignedHandler((c, parts) =>
+                        _logger.LogInformation("Assigned partitions: {Parts}", string.Join(", ", parts)))
+                    .SetPartitionsRevokedHandler((c, parts) =>
+                        _logger.LogInformation("Revoked partitions: {Parts}", string.Join(", ", parts)))
+                    .Build();
 
-                            _logger.LogWarning("Waiting for topics to become available: {Missing}", string.Join(", ", missing));
-
-                            // Attempt best-effort topic creation (requires broker/admin rights)
-                            try
-                            {
-                                var specs = missing.Select(t => new TopicSpecification { Name = t, NumPartitions = 1, ReplicationFactor = 1 }).ToList();
-                                if (specs.Count > 0)
-                                {
-                                    _logger.LogInformation("Attempting to create missing topics: {Missing}", string.Join(", ", missing));
-                                    try
-                                    {
-                                        admin.CreateTopicsAsync(specs).GetAwaiter().GetResult();
-                                        _logger.LogInformation("CreateTopicsAsync requested for: {Missing}", string.Join(", ", missing));
-                                    }
-                                    catch (CreateTopicsException cte)
-                                    {
-                                        _logger.LogWarning(cte, "CreateTopicsException while creating topics; continuing to wait");
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.LogWarning(ex, "Exception while attempting to create topics; continuing to wait");
-                                    }
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Error when attempting topic creation; will continue to wait");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error while fetching Kafka metadata; retrying...");
-                    }
-
-                    if (sw.Elapsed > waitTimeout)
-                    {
-                        _logger.LogWarning("Timeout waiting for Kafka metadata after {Seconds}s; proceeding and relying on consumer to handle late topic creation.", waitTimeout.TotalSeconds);
-                        break;
-                    }
-
-                    try { Task.Delay(pollInterval, cancellationToken).Wait(cancellationToken); } catch (OperationCanceledException) { break; }
-                }
+                _consumer.Subscribe(topics);
+                _logger.LogInformation("UserStatusConsumerService subscribed to topics: {Topics} (bootstrap: {Bootstrap})", string.Join(", ", topics), bootstrap);
+                return true;
             }
             catch (Exception ex)
             {
-                // If admin client can't be created, log and proceed — consumer will still attempt to connect.
-                _logger.LogWarning(ex, "Admin client creation/metadata check failed for bootstrap={Bootstrap}. Consumer will still attempt to connect.", bootstrap);
+                _logger.LogWarning(ex, "Failed to create/subscribe consumer. Will retry later.");
+                try
+                {
+                    _consumer?.Close();
+                    _consumer?.Dispose();
+                }
+                catch { }
+                _consumer = null;
+                return false;
             }
-
-            _consumer.Subscribe(topics);
-
-            _logger.LogInformation("UserStatusConsumerService subscribed to topics: {Topics} (bootstrap: {Bootstrap})", string.Join(", ", topics), bootstrap);
-
-            return base.StartAsync(cancellationToken);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (_consumer == null)
-            {
-                _logger.LogError("Kafka consumer is not initialized.");
-                return;
-            }
-
             var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
+            // Retry loop: attempt to initialize consumer until successful or cancellation requested.
             while (!stoppingToken.IsCancellationRequested)
             {
-                try
+                if (_consumer == null)
                 {
-                    var cr = _consumer.Consume(stoppingToken);
-                    if (cr == null) continue;
+                    var (bootstrap, groupId, topics) = ReadKafkaConfig();
+                    _logger.LogInformation("ExecuteAsync attempting Kafka init: bootstrap={Bootstrap} groupId={GroupId} topics=[{Topics}]", bootstrap, groupId, string.Join(";", topics));
 
-                    _logger.LogDebug("Consumed message from topic {Topic} partition {Partition} offset {Offset}", cr.Topic, cr.Partition, cr.Offset);
+                    if (!ValidateTopics(topics, out var invalid))
+                    {
+                        _logger.LogError("Invalid Kafka topic names detected: {Invalid}. Consumer will not be initialized until config is fixed.", string.Join(", ", invalid));
+                        try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); } catch (OperationCanceledException) { break; }
+                        continue;
+                    }
+
+                    var parts = bootstrap.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    var host = parts.Length > 0 ? parts[0] : "kafka";
+                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9092;
+
+                    if (!TcpConnectTest(host, port, TimeSpan.FromSeconds(3)))
+                    {
+                        _logger.LogWarning("TCP connect to Kafka bootstrap {Bootstrap} FAILED. Check Docker network / DNS / advertised.listeners / port mapping. Retrying...", bootstrap);
+                        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { break; }
+                        continue;
+                    }
 
                     try
                     {
-                        var value = cr.Message?.Value;
-                        if (string.IsNullOrEmpty(value))
+                        using var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = bootstrap }).Build();
+                        var md = admin.GetMetadata(TimeSpan.FromSeconds(5));
+                        if (md?.Brokers == null || md.Brokers.Count == 0)
                         {
-                            _logger.LogWarning("Received empty message for users.status-changed.");
-                            _consumer.Commit(cr);
+                            _logger.LogWarning("Admin client reports no brokers yet at {Bootstrap}. Retrying...", bootstrap);
+                            try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { break; }
                             continue;
                         }
-
-                        var evt = JsonSerializer.Deserialize<UserStatusChangedEvent>(value, jsonOptions);
-                        if (evt == null)
-                        {
-                            _logger.LogWarning("Failed to deserialize UserStatusChangedEvent: {Value}", value);
-                            _consumer.Commit(cr);
-                            continue;
-                        }
-
-                        // Resolve a scoped handler from a scope created per message to avoid
-                        // injecting a scoped service into this singleton hosted service.
-                        using (var scope = _serviceProvider.CreateScope())
-                        {
-                            var handler = scope.ServiceProvider.GetRequiredService<OrderService.Handlers.UserStatusChangedHandler>();
-                            await handler.HandleAsync(evt, stoppingToken);
-                        }
-
-                        // Commit offset only after successful handling
-                        _consumer.Commit(cr);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // shutdown requested
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Unhandled exception while processing user status change message.");
-                        // Do NOT commit so message can be retried depending on consumer group semantics.
+                        _logger.LogWarning(ex, "Admin metadata check failed (transient). Retrying...");
+                        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { break; }
+                        continue;
                     }
+
+                    if (!TryCreateAndSubscribeConsumer(bootstrap, groupId, topics))
+                    {
+                        try { await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); } catch (OperationCanceledException) { break; }
+                        continue;
+                    }
+                }
+
+                // If consumer is now initialized, enter consume loop
+                try
+                {
+                    var cr = _consumer.Consume(TimeSpan.FromSeconds(1));
+                    if (cr == null) continue;
+
+                    if (cr.IsPartitionEOF) continue;
+
+                    _logger.LogDebug("Consumed message from topic {Topic} partition {Partition} offset {Offset}", cr.Topic, cr.Partition, cr.Offset);
+
+                    var value = cr.Message?.Value;
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        _logger.LogWarning("Received empty message for users.status-changed.");
+                        _consumer.Commit(cr);
+                        continue;
+                    }
+
+                    var evt = JsonSerializer.Deserialize<UserStatusChangedEvent>(value, jsonOptions);
+                    if (evt == null)
+                    {
+                        _logger.LogWarning("Failed to deserialize UserStatusChangedEvent: {Value}", value);
+                        _consumer.Commit(cr);
+                        continue;
+                    }
+
+                    using (var scope = _serviceProvider.CreateScope())
+                    {
+                        var handler = scope.ServiceProvider.GetRequiredService<OrderService.Handlers.UserStatusChangedHandler>();
+                        await handler.HandleAsync(evt, stoppingToken);
+                    }
+
+                    _consumer.Commit(cr);
                 }
                 catch (ConsumeException cex)
                 {
                     _logger.LogError(cex, "Error consuming Kafka message: {Reason}", cex.Error.Reason);
-                    await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+                    try { await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken); } catch (OperationCanceledException) { break; }
                 }
                 catch (OperationCanceledException)
                 {
-                    // graceful shutdown
+                    break;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Unexpected error in consumer loop.");
-                    await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+                    try { await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken); } catch (OperationCanceledException) { break; }
                 }
             }
         }

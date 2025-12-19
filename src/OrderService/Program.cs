@@ -6,6 +6,8 @@ using OrderService.Handlers;
 using OrderService.BackgroundServices;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 builder.Services.AddControllers();
 builder.Services.AddOrderService(builder.Configuration);
@@ -13,10 +15,6 @@ builder.Services.AddOrderService(builder.Configuration);
 // In-memory EF provider (fast for dev/tests). NOTE: no migrations with this provider.
 builder.Services.AddDbContext<OrderDbContext>(options =>
     options.UseInMemoryDatabase("OrderService_InMemory"));
-
-// Register handler and Kafka consumer hosted service
-builder.Services.AddScoped<UserStatusChangedHandler>();
-builder.Services.AddHostedService<UserStatusConsumerService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -35,6 +33,12 @@ builder.Services.AddHttpClient("userservice", client =>
     var baseUrl = builder.Configuration["USER_SERVICE_BASE_URL"] ?? "http://userservice:8080";
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(10);
+});
+
+// If background crashes, see it clearly
+builder.Services.Configure<HostOptions>(o =>
+{
+    o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
 });
 
 var app = builder.Build();

@@ -1,4 +1,4 @@
-namespace EventBridge.Configuration
+namespace OrderService.Configuration
 {
     public class KafkaOptions
     {

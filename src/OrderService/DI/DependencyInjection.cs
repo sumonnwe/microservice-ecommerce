@@ -1,10 +1,12 @@
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
-using OrderService.Infrastructure.EF;
-using Shared.Domain.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using OrderService.Application;
+using OrderService.BackgroundServices;
+using OrderService.Handlers;
+using OrderService.Infrastructure.EF;
 using OrderService.Infrastructure.Kafka;
+using Shared.Domain.Services;
 
 namespace OrderService.DI
 {
@@ -20,6 +22,9 @@ namespace OrderService.DI
             var bootstrap = configuration["KAFKA_BOOTSTRAP_SERVERS"] ?? "kafka:9092";
             services.AddSingleton<Shared.Domain.Services.IKafkaProducer>(_ => new KafkaProducer(bootstrap));
 
+            // Register handler and Kafka consumer hosted service
+            services.AddScoped<UserStatusChangedHandler>();
+            services.AddHostedService<UserStatusConsumerService>();  
             // Background dispatcher is not added here; OutboxDispatcher project will poll this service via HTTP
             return services;
         }
