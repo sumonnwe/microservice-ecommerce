@@ -2,10 +2,14 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using OrderService.DI;
 using OrderService.Infrastructure.EF;
+using OrderService.Handlers;
+using OrderService.BackgroundServices;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
-builder.Services.AddControllers(); 
+builder.Services.AddControllers();
 builder.Services.AddOrderService(builder.Configuration);
 
 // In-memory EF provider (fast for dev/tests). NOTE: no migrations with this provider.
@@ -23,11 +27,18 @@ builder.Services.AddSwaggerGen(c =>
     }
 });
 
+// Keep HTTP client to validate existing logic (still used in Create order).
 builder.Services.AddHttpClient("userservice", client =>
 {
     var baseUrl = builder.Configuration["USER_SERVICE_BASE_URL"] ?? "http://userservice:8080";
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(10);
+});
+
+// If background crashes, see it clearly
+builder.Services.Configure<HostOptions>(o =>
+{
+    o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
 });
 
 var app = builder.Build();
@@ -40,7 +51,7 @@ using (var scope = app.Services.CreateScope())
 }
 
 if (app.Environment.IsDevelopment())
-{ 
+{
     app.UseDeveloperExceptionPage();
     app.UseSwagger();
     app.UseSwaggerUI();

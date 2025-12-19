@@ -7,5 +7,7 @@ namespace UserService.Events
         public Guid Id { get; set; }
         public string Name { get; set; } = default!;
         public string Email { get; set; } = default!;
+
+        public string Status { get; set; } = "Active";
     }
 }

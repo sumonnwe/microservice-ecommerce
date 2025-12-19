@@ -8,6 +8,12 @@
     <NoWarn>$(NoWarn);1591</NoWarn> 
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="Infrastructure\Kafka\**" />
+    <Content Remove="Infrastructure\Kafka\**" />
+    <EmbeddedResource Remove="Infrastructure\Kafka\**" />
+    <None Remove="Infrastructure\Kafka\**" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Remove="Controllers\AuthController.cs" />
     <Compile Remove="DI\UserServiceExtensions.cs" />
   </ItemGroup>
@@ -16,7 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Shared\Shared.csproj" />
-    <PackageReference Include="Confluent.Kafka" Version="2.1.1" />
+    <PackageReference Include="Confluent.Kafka" Version="2.12.0" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.1.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />

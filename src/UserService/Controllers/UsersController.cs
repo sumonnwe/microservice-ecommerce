@@ -1,8 +1,13 @@
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Shared.Domain;
 using Shared.Domain.Entities;
+using System;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using UserService.Domain.Entities;
 using UserService.DTOs;
 using UserService.Infrastructure.EF;
@@ -16,6 +21,7 @@ namespace UserService.Controllers
     /// Endpoints:
     /// - POST /api/users : create a user and enqueue a "users.created" outbox event.
     /// - GET  /api/users/{id} : retrieve a user by id.
+    /// - PATCH /api/users/{id}/status : update user status (creates outbox event users.status-changed)
     /// </remarks>
     [ApiController]
     [Route("api/users")]
@@ -23,12 +29,12 @@ namespace UserService.Controllers
     public class UsersController : ControllerBase
     {
         private readonly UserDbContext _db;
-        private readonly ILogger<UsersController> _logger; 
+        private readonly ILogger<UsersController> _logger;
 
         public UsersController(UserDbContext db, ILogger<UsersController> logger)
         {
             _db = db;
-            _logger = logger; 
+            _logger = logger;
         }
 
         /// <summary>
@@ -108,9 +114,9 @@ namespace UserService.Controllers
                 });
             }
 
-            var user = new User { Id = Guid.NewGuid(), Name = name, Email = email };
+            var user = new User { Id = Guid.NewGuid(), Name = name, Email = email, Status = UserStatus.Active };
 
-            var evt = new { Id = user.Id, Name = user.Name, Email = user.Email };
+            var evt = new { Id = user.Id, Name = user.Name, Email = user.Email, Status = UserStatus.Active };
             var outbox = new OutboxEntry
             {
                 Id = Guid.NewGuid(),
@@ -211,5 +217,114 @@ namespace UserService.Controllers
                 return Problem(detail: "Failed to fetch user.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
             }
         }
+
+        /// <summary>
+        /// PATCH /api/users/{id}/status
+        /// Update the user's status and append an OutboxEntry with an <c>users.status-changed</c> event.
+        /// </summary>
+        /// <param name="id">User id (GUID)</param>
+        /// <param name="dto">Payload containing the target status and optional reason.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
+        /// <remarks>
+        /// - Validates that <c>NewStatus</c> maps to a defined <see cref="UserStatus"/> enum value.
+        /// - Ensures the user exists.
+        /// - If the requested status equals the current status the call is a no-op and returns 204.
+        /// </remarks>
+        /// <response code="204">Status updated (or no-op when identical).</response>
+        /// <response code="400">Invalid payload or unknown status.</response>
+        /// <response code="404">User not found.</response>
+        /// <response code="499">Request cancelled.</response>
+        /// <response code="500">Server error while updating status.</response>
+        [HttpPatch("{id:guid}/status")]
+        [Consumes("application/json")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UserStatusUpdateDto dto, CancellationToken cancellationToken)
+        {
+            if (dto == null)
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid request", Detail = "Request body cannot be empty." });
+            }
+
+            if (string.IsNullOrWhiteSpace(dto.NewStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = "newStatus is required." });
+            }
+
+            // Parse and validate new status
+            if (!Enum.TryParse<UserStatus>(dto.NewStatus, ignoreCase: true, out var newStatus) ||
+                !Enum.IsDefined(typeof(UserStatus), newStatus))
+            {
+                return BadRequest(new ProblemDetails { Title = "Invalid status", Detail = $"Unknown status '{dto.NewStatus}'." });
+            }
+
+            try
+            {
+                var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+                if (user == null) return NotFound(new ProblemDetails { Title = "Not found", Detail = "User not found." });
+
+                var oldStatus = user.Status;
+                if (oldStatus == newStatus)
+                {
+                    _logger.LogInformation("UpdateStatus: no-op for user {UserId}, status already {Status}", id, newStatus);
+                    return NoContent();
+                }
+
+                // Optional: enforce allowed transitions here (example commented)
+                // if (!IsTransitionAllowed(oldStatus, newStatus)) return BadRequest(new ProblemDetails { Title = "Invalid transition", Detail = "Requested status transition is not allowed." });
+
+                user.Status = newStatus;
+
+                var evt = new Shared.Domain.Events.UserStatusChangedEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    OccurredAtUtc = DateTime.UtcNow,
+                    UserId = user.Id,
+                    OldStatus = oldStatus,
+                    NewStatus = newStatus,
+                    Reason = dto.Reason
+                };
+
+                var outbox = new OutboxEntry
+                {
+                    Id = Guid.NewGuid(),
+                    EventType = evt.EventType, // "users.status-changed"
+                    AggregateId = user.Id,
+                    Payload = JsonSerializer.Serialize(evt),
+                    RetryCount = 0,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                // Save user and outbox atomically
+                using var saveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                saveCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+                _db.Users.Update(user);
+                _db.OutboxEntries.Add(outbox);
+                await _db.SaveChangesAsync(saveCts.Token);
+
+                _logger.LogInformation("User status updated. UserId={UserId} Old={Old} New={New}", user.Id, oldStatus, newStatus);
+
+                // We purposely do NOT publish directly here; we create an OutboxEntry so existing dispatcher reliably publishes the event.
+                return NoContent();
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("UpdateStatus cancelled for user {UserId}", id);
+                return StatusCode(StatusCodes.Status499ClientClosedRequest);
+            }
+            catch (DbUpdateException dbEx)
+            {
+                _logger.LogError(dbEx, "Database error updating status for user {UserId}", id);
+                return Problem(detail: "Database error while updating user status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error updating status for user {UserId}", id);
+                return Problem(detail: "Unexpected error while updating user status.", statusCode: StatusCodes.Status500InternalServerError, instance: HttpContext?.TraceIdentifier);
+            }
+        } 
     }
 }
