@@ -49,27 +49,32 @@ flowchart LR
 
 #### Services
 - UserService
--- REST API for user creation.
--- Change user status (Active / Inactive)
--- Writes User and OutboxEntry in a single EF Core transaction.
+ -- REST API for user creation.
+ -- Change user status (Active / Inactive)
+ -- Writes User and OutboxEntry in a single EF Core transaction.
+
 - OrderService
--- Same pattern as UserService for orders.
--- Subscribe to users.status-changed
--- Cancel pending orders when user becomes inactive
+ -- Same pattern as UserService for orders.
+ -- Subscribe to users.status-changed
+ -- Cancel pending orders when user becomes inactive
+
 - Outbox Publisher (In-Service)
--- Runs as a BackgroundService inside each microservice
--- Reads local Outbox table
--- Publishes events to Kafka
--- No HTTP polling, no central dispatcher
+ -- Runs as a BackgroundService inside each microservice
+ -- Reads local Outbox table
+ -- Publishes events to Kafka
+ -- No HTTP polling, no central dispatcher
+
 - Kafka
--- Event backbone.
--- Topics: users.created, orders.created, dead-letter, users.status-changed, orders.cancelled
+ -- Event backbone.
+ -- Topics: users.created, orders.created, dead-letter, users.status-changed, orders.cancelled
+
 - EventBridge
--- Kafka consumer.
--- Broadcasts events to frontend via SignalR.
+ -- Kafka consumer.
+ -- Broadcasts events to frontend via SignalR.
+
 - React Frontend
--- Connects to SignalR.
--- Displays live event streams.
+ -- Connects to SignalR.
+ -- Displays live event streams.
 
 ---
 
@@ -168,7 +173,8 @@ sequenceDiagram
 flowchart TB
   subgraph "UserService API"
     U1["POST /api/users - Create User"]
-    U2["GET /api/users/{id} - Get User"]
+    U2["GET /api/users/{id} - Get User"] 
+    U3["PATC /api/users/{id}/status - Update User's Status"]
     O1["GET /api/outbox/unsent - Internal"]
     O2["POST /api/outbox/mark-sent/{id} - Internal"]
     O3["POST /api/outbox/increment-retry/{id} - Internal"]
@@ -182,6 +188,7 @@ flowchart TB
   subgraph "OrderService API"
     U1["POST /api/orders - Create Order"]
     U2["GET /api/orders/{id} - Get Order"]
+    U3["PATCH /api/orders/{id}/status - Update Order's Status"]
     O1["GET /api/outbox/unsent - Internal"]
     O2["POST /api/outbox/mark-sent/{id} - Internal"]
     O3["POST /api/outbox/increment-retry/{id} - Internal"]
